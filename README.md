@@ -39,6 +39,10 @@ This is a low-level library: the application still owns allocation policy, resou
 GPU synchronization. The optional NoGraphicsAPIUtility library supplies shared shader types, math,
 allocators, upload queues, and deferred deletion without making them part of the graphics API.
 
+Textures with `srgb_views` allow their paired sRGB/UNORM sampled and attachment views; select attachment formats with `RenderViewDesc::format`.
+Vulkan supplies the two-format image view list. Metal uses the native sRGB pairing without the general pixel-format-view usage flag,
+so render-target compression remains eligible. General compatible reinterpretations still require `mutable_format`.
+
 Initialization and resource creation failures return an error or an empty handle.
 Ordinary frame operations, including draws, dispatches, and descriptor writes, return no error codes; native results are checked with debug assertions.
 Install `set_error_callback` on the initialization thread for backend diagnostics, including the Vulkan operation, result and requested allocation size.

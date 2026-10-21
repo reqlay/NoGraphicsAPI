@@ -2653,17 +2653,20 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
     const VkFormat format = to_vk(desc.format);
     const VkFormatFeatureFlags2 sampled_features = required_format_features(TextureUsage::sampled);
     const VkFormatFeatureFlags2 storage_features = required_format_features(TextureUsage::storage);
+    const VkFormatFeatureFlags2 color_features = required_format_features(TextureUsage::color_attachment);
     uint32 view_format_count = 1;
     output.view_formats[0] = format;
-    for (uint32 value = 0; desc.mutable_format && value < format_count; ++value)
+    for (uint32 value = 0; (desc.mutable_format || desc.srgb_views) && value < format_count; ++value)
     {
         const Format view_format = static_cast<Format>(value);
-        if (view_format == desc.format || !compatible_view_formats(desc.format, view_format))
+        if ((!desc.mutable_format && view_format != srgb_view_pair(desc.format))
+            || view_format == desc.format || !compatible_view_formats(desc.format, view_format))
             continue;
         const VkFormatFeatureFlags2 view_features = device.format_features[value];
         const bool sampled = has_flag(desc.usage, TextureUsage::sampled) && (view_features & sampled_features) == sampled_features;
         const bool storage = has_flag(desc.usage, TextureUsage::storage) && (view_features & storage_features) == storage_features;
-        if (!sampled && !storage)
+        const bool color = has_flag(desc.usage, TextureUsage::color_attachment) && (view_features & color_features) == color_features;
+        if (!sampled && !storage && !color)
             continue;
         assert(view_format_count < format_count);
         output.view_formats[view_format_count++] = to_vk(view_format);
@@ -2820,7 +2823,7 @@ RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noe
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = texture->image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = to_vk(texture->format),
+        .format = to_vk(desc.format == Format::undefined ? texture->format : desc.format),
         .subresourceRange = {
             .aspectMask = image_aspects(texture->format),
             .baseMipLevel = desc.mip_level,

@@ -369,6 +369,11 @@ static_assert(default_texture.type == gpu::TextureType::two_d && default_texture
               default_texture.usage == gpu::TextureUsage::sampled);
 constexpr gpu::TextureDesc mutable_texture{.mutable_format = true};
 static_assert(mutable_texture.mutable_format);
+static_assert(!gpu::TextureDesc{}.srgb_views);
+static_assert(gpu::TextureDesc{.srgb_views = true}.srgb_views);
+static_assert(gpu::srgb_view_pair(gpu::Format::bgra8_srgb) == gpu::Format::bgra8_unorm);
+static_assert(gpu::srgb_view_pair(gpu::Format::bc7_unorm) == gpu::Format::bc7_srgb);
+static_assert(gpu::srgb_view_pair(gpu::Format::rgba16_float) == gpu::Format::undefined);
 constexpr gpu::TextureDesc sized_texture{
     .extent = {.x = 64, .y = 32, .z = 1},
     .usage = gpu::TextureUsage::sampled | gpu::TextureUsage::transfer_destination,

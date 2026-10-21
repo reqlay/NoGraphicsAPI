@@ -159,6 +159,28 @@ enum class Format : uint8
     undefined, // Must remain last; preceding values are concrete texture formats.
 };
 
+[[nodiscard]] constexpr Format srgb_view_pair(Format format) noexcept
+{
+    switch (format)
+    {
+    case Format::r8_srgb: return Format::r8_unorm;
+    case Format::r8_unorm: return Format::r8_srgb;
+    case Format::rg8_srgb: return Format::rg8_unorm;
+    case Format::rg8_unorm: return Format::rg8_srgb;
+    case Format::rgba8_srgb: return Format::rgba8_unorm;
+    case Format::rgba8_unorm: return Format::rgba8_srgb;
+    case Format::bgra8_srgb: return Format::bgra8_unorm;
+    case Format::bgra8_unorm: return Format::bgra8_srgb;
+    case Format::astc_4x4_srgb: return Format::astc_4x4_unorm;
+    case Format::astc_4x4_unorm: return Format::astc_4x4_srgb;
+    case Format::bc3_srgb: return Format::bc3_unorm;
+    case Format::bc3_unorm: return Format::bc3_srgb;
+    case Format::bc7_srgb: return Format::bc7_unorm;
+    case Format::bc7_unorm: return Format::bc7_srgb;
+    default: return Format::undefined;
+    }
+}
+
 struct TextureFormatInfo
 {
     uint32x2 block_extent = {};
@@ -492,11 +514,13 @@ struct TextureDesc
     uint32 layer_count = 1; // Vulkan array layers; cube faces are individual layers.
     Format format = Format::rgba8_unorm;
     bool mutable_format = false; // Allow format-compatible descriptor views, but could lose DCC.
+    bool srgb_views = false; // Allow just the paired sRGB/UNORM views; preserves Metal color compression.
     TextureUsage usage = TextureUsage::sampled;
 };
 
 struct RenderViewDesc
 {
+    Format format = Format::undefined; // Undefined inherits the texture format.
     uint32 mip_level = 0;
     uint32 slice = 0; // Physical array slice; cube faces are individual slices.
 };

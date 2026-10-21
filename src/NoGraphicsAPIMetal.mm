@@ -885,7 +885,10 @@ RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noe
 {
     @autoreleasepool
     {
-        return new RenderView{.texture = [texture->texture retain], .mip = desc.mip_level, .slice = desc.slice};
+        id<MTLTexture> view = desc.format == Format::undefined || desc.format == texture->desc.format
+            ? [texture->texture retain] : [texture->texture newTextureViewWithPixelFormat:pixel_format(desc.format)];
+        if (!view) return nullptr;
+        return new RenderView{.texture = view, .mip = desc.mip_level, .slice = desc.slice};
     }
 }
 
