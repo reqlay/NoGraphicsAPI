@@ -305,6 +305,8 @@ struct Device
     id<MTL4Compiler> compiler = nil;
     id<MTLResidencySet> residency = nil;
     id<MTLCommandQueue> presentation_queue = nil;
+    id<MTLEvent> presentation_ready = nil;
+    id<MTLEvent> presentation_done = nil;
     CAMetalLayer* layer = nil;
     id<CAMetalDrawable> drawable = nil;
     CommandBuffer* acquired = nullptr;
@@ -607,7 +609,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             {
                 device->layer.framebufferOnly = NO;
                 device->presentation_queue = [device->metal newCommandQueue];
-                if (!device->presentation_queue)
+                device->presentation_ready = [device->metal newEvent];
+                device->presentation_done = [device->metal newEvent];
+                if (!device->presentation_queue || !device->presentation_ready || !device->presentation_done)
                 {
                     report_error("presentation queue", nil);
                     destroy_device(device);
@@ -629,6 +633,8 @@ void destroy_device(Device* device) noexcept
         if (device->layer) [device->queues[0].queue removeResidencySet:device->layer.residencySet];
         [device->drawable release];
         [device->presentation_queue release];
+        [device->presentation_ready release];
+        [device->presentation_done release];
         [device->layer release];
         for (uint32 i = 0; i < device->caps.queue_count; ++i)
         {
@@ -1365,11 +1371,18 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
         submit(device, desc, 0);
         if (device->presentation_queue)
         {
-            // Steam's macOS overlay hooks command-buffer presentation, including frames rendered with Metal 4.
+            // Shared-event waits defer scheduling and therefore presentDrawable's registration until rendering completes.
+            [device->queues[0].queue signalEvent:device->presentation_ready value:device->queues[0].submitted_value];
             id<MTLCommandBuffer> presentation = [device->presentation_queue commandBuffer];
-            [presentation encodeWaitForEvent:device->queues[0].completion value:device->queues[0].submitted_value];
+            [presentation encodeWaitForEvent:device->presentation_ready value:device->queues[0].submitted_value];
             [presentation presentDrawable:device->drawable];
+            // Steam can append drawable writes during commit. A following buffer signals completion after all hook-injected work.
+            id<MTLCommandBuffer> completion = [device->presentation_queue commandBuffer];
+            [completion encodeSignalEvent:device->presentation_done value:device->queues[0].submitted_value];
+            [device->queues[0].queue waitForEvent:device->presentation_done value:device->queues[0].submitted_value];
+            [device->queues[0].queue signalDrawable:device->drawable];
             [presentation commit];
+            [completion commit];
         }
         else
         {

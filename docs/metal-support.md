@@ -86,8 +86,11 @@ After `wait_idle()`, with no acquired frame, the setter accepts the current form
 
 Metal 4 presents directly with framebuffer-only drawables by default. On macOS, set
 `DeviceDesc::steam_overlay_compatibility = true` to allow drawable texture views and use Steam's classic Metal presentation hook.
-Rendering stays on Metal 4; a separate presentation command buffer waits for its completion on the GPU.
-This adds one submission per frame and gives up framebuffer-only drawable optimizations. `wait_idle()` also drains the presentation queue.
+Rendering stays on Metal 4. GPU-only events hand work to the classic presentation buffer and back to the render queue,
+which signals drawable readiness after the overlay hook's commands finish. A following classic buffer signals completion so
+writes appended by the `commit` hook are included. Unlike a shared-event wait, this allows presentation to be scheduled before
+rendering completes. Application completion timelines still cover application rendering.
+This adds two submissions per frame and gives up framebuffer-only drawable optimizations. `wait_idle()` also drains the presentation queue.
 The flag has no effect on Vulkan, iOS or headless devices.
 Use three drawables to keep scanout from starving a two-frame renderer on Apple displays.
 

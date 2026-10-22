@@ -21,7 +21,10 @@ Coverage includes shared root layouts, GPU pointers, descriptor indexing/copies,
 commands, texture transfers, viewport orientation, presentation and command-pool reuse. Triangle,
 cube and deferred-renderer examples run with Metal API validation.
 Presentation tests cover default and Steam-compatible modes with two and three drawables, two frames in flight,
-resize after idle, shutdown and the layer's framebuffer-only setting. Native execution of the Steam-compatible cases remains pending.
+resize after idle, shutdown and the layer's framebuffer-only setting. On 22 October, all eight focused presentation and timeline-retirement
+checks pass on A18 Pro with API validation. The three overlay synchronization checks require a macOS window session and intercept classic
+presentation/commit to gate rendering and inject an optional delayed overlay write. They verify early scheduling and completion before drawable
+release; all three fail against the previous backend. These checks establish ordering, not fullscreen frame rate.
 The tests do not load Steam; overlay composition must also be checked in the installed game with `steam_overlay_compatibility` enabled.
 
 ## Concurrency and lifetime

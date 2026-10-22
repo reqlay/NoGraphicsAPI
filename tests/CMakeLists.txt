@@ -354,6 +354,18 @@ if(APPLE)
         ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=0")
 endif()
 
+if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_executable(test_metal_overlay_sync metal_overlay_sync_test.mm)
+    NoGraphicsAPI_disable_exceptions(test_metal_overlay_sync)
+    target_link_libraries(test_metal_overlay_sync PRIVATE NoGraphicsAPI::NoGraphicsAPI "-framework AppKit")
+    add_test(NAME test_metal_overlay_sync COMMAND test_metal_overlay_sync)
+    add_test(NAME test_metal_overlay_sync_draw COMMAND test_metal_overlay_sync --overlay)
+    add_test(NAME test_metal_overlay_sync_commit COMMAND test_metal_overlay_sync --overlay-on-commit)
+    set_tests_properties(test_metal_overlay_sync test_metal_overlay_sync_draw test_metal_overlay_sync_commit PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 15 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:"
+        ENVIRONMENT "MTL_DEBUG_LAYER=1;MTL_SHADER_VALIDATION=0")
+endif()
+
 if(NOT APPLE)
     add_executable(test_startup_failures startup_failures_test.cpp ${queue_family_spv} ${continuation_vertex_spv} ${continuation_fragment_spv})
     NoGraphicsAPI_disable_exceptions(test_startup_failures)
