@@ -2819,8 +2819,14 @@ RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc) noe
         .width = width,
         .height = height,
     };
+    const VkImageViewUsageCreateInfo view_usage{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
+        .usage = image_aspects(texture->format) == VK_IMAGE_ASPECT_COLOR_BIT
+            ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    };
     const VkImageViewCreateInfo view_info{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = &view_usage,
         .image = texture->image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
         .format = to_vk(desc.format == Format::undefined ? texture->format : desc.format),

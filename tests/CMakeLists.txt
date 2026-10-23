@@ -165,6 +165,13 @@ add_test(NAME test_texture_alias COMMAND test_texture_alias)
 set_tests_properties(test_texture_alias PROPERTIES
     SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
 
+add_executable(test_texture_views texture_views_test.cpp)
+NoGraphicsAPI_disable_exceptions(test_texture_views)
+target_link_libraries(test_texture_views PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+add_test(NAME test_texture_views COMMAND test_texture_views)
+set_tests_properties(test_texture_views PROPERTIES
+    SKIP_RETURN_CODE 77 TIMEOUT 60 FAIL_REGULAR_EXPRESSION "Validation Error;NoGraphicsAPI validation:")
+
 if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(test_metal_resource_concurrency metal_resource_concurrency_test.cpp ${queue_family_spv})
     NoGraphicsAPI_disable_exceptions(test_metal_resource_concurrency)
@@ -357,7 +364,7 @@ endif()
 if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
     add_executable(test_metal_overlay_sync metal_overlay_sync_test.mm)
     NoGraphicsAPI_disable_exceptions(test_metal_overlay_sync)
-    target_link_libraries(test_metal_overlay_sync PRIVATE NoGraphicsAPI::NoGraphicsAPI "-framework AppKit")
+    target_link_libraries(test_metal_overlay_sync PRIVATE NoGraphicsAPI::NoGraphicsAPI)
     add_test(NAME test_metal_overlay_sync COMMAND test_metal_overlay_sync)
     add_test(NAME test_metal_overlay_sync_draw COMMAND test_metal_overlay_sync --overlay)
     add_test(NAME test_metal_overlay_sync_commit COMMAND test_metal_overlay_sync --overlay-on-commit)

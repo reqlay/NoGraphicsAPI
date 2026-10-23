@@ -1,8 +1,6 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
-#import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-#import <QuartzCore/CATransaction.h>
 #import <objc/runtime.h>
 #include <dispatch/dispatch.h>
 #include <pthread.h>
@@ -20,18 +18,17 @@ struct TestState
     id<MTLEvent> overlay_gate = nil;
     id<MTLSharedEvent> overlay_release = nil;
     id<MTLSharedEvent> overlay_completed = nil;
+    id<MTLSharedEvent> drawable_ready = nil;
     dispatch_semaphore_t scheduled = nullptr;
-    dispatch_semaphore_t presented = nullptr;
     IMP original_present = nullptr;
     IMP original_commit = nullptr;
+    IMP original_ready = nullptr;
     id overlay_commands = nil;
     id<CAMetalDrawable> overlay_drawable = nil;
     bool overlay = false;
     bool overlay_on_commit = false;
     bool scheduled_early = false;
-    bool presented_early = false;
-    uint64 completion_at_present = 0;
-    uint32 worker_done = 0;
+    bool readiness_early = false;
 } test;
 
 void encode_overlay(id commands, id<CAMetalDrawable> drawable)
@@ -58,11 +55,14 @@ void present_hook(id commands, SEL selector, id<CAMetalDrawable> drawable)
     }
     else encode_overlay(commands, drawable);
     [commands addScheduledHandler:^(id<MTLCommandBuffer>) { dispatch_semaphore_signal(test.scheduled); }];
-    [drawable addPresentedHandler:^(id<MTLDrawable>) {
-        test.completion_at_present = test.overlay_completed.signaledValue;
-        dispatch_semaphore_signal(test.presented);
-    }];
     reinterpret_cast<void (*)(id, SEL, id<CAMetalDrawable>)>(test.original_present)(commands, selector, drawable);
+}
+
+void ready_hook(id<MTL4CommandQueue> queue, SEL selector, id<CAMetalDrawable> drawable)
+{
+    reinterpret_cast<void (*)(id, SEL, id<CAMetalDrawable>)>(test.original_ready)(queue, selector, drawable);
+    // Observe GPU readiness directly; dropped drawables can invoke presentation callbacks before rendering completes.
+    [queue signalEvent:test.drawable_ready value:1];
 }
 
 void commit_hook(id commands, SEL selector)
@@ -80,15 +80,14 @@ void* release_rendering(void*)
     @autoreleasepool
     {
         test.scheduled_early = dispatch_semaphore_wait(test.scheduled, dispatch_time(DISPATCH_TIME_NOW, 1000000000)) == 0;
-        test.presented_early = dispatch_semaphore_wait(test.presented, DISPATCH_TIME_NOW) == 0;
+        test.readiness_early = test.drawable_ready.signaledValue != 0;
         gpu::submit(test.device, {.completion = {.semaphore = test.gate, .value = 1}}, 1);
         gpu::wait_timeline({.semaphore = test.rendered, .value = 1});
         if (test.overlay)
         {
-            test.presented_early |= dispatch_semaphore_wait(test.presented, dispatch_time(DISPATCH_TIME_NOW, 100000000)) == 0;
+            test.readiness_early |= [test.drawable_ready waitUntilSignaledValue:1 timeoutMS:100];
             test.overlay_release.signaledValue = 1;
         }
-        __atomic_store_n(&test.worker_done, 1, __ATOMIC_RELEASE);
         return nullptr;
     }
 }
@@ -104,18 +103,8 @@ int main(int argc, char** argv)
     }
     @autoreleasepool
     {
-        [NSApplication sharedApplication];
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        [NSApp finishLaunching];
-        NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 320, 180)
-            styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
-        window.releasedWhenClosed = NO;
-        window.title = @"Metal overlay synchronization test";
-        [window center];
         CAMetalLayer* layer = [CAMetalLayer new];
-        layer.drawableSize = CGSizeMake(320, 180);
-        window.contentView.wantsLayer = YES;
-        window.contentView.layer = layer;
+        layer.drawableSize = CGSizeMake(16, 16);
         const gpu::DeviceInit init = gpu::create_device({.window = layer, .desired_swapchain_image_count = 3,
             .steam_overlay_compatibility = true, .desired_queue_count = 2});
         if (init.error == gpu::Error::unsupported) { [layer release]; return 77; }
@@ -129,25 +118,16 @@ int main(int argc, char** argv)
         [test.overlay_queue waitForEvent:test.overlay_release value:1];
         [test.overlay_queue signalEvent:test.overlay_gate value:1];
         test.overlay_completed = [layer.device newSharedEvent];
+        test.drawable_ready = [layer.device newSharedEvent];
         test.scheduled = dispatch_semaphore_create(0);
-        test.presented = dispatch_semaphore_create(0);
         id<MTLCommandQueue> hook_queue = [layer.device newCommandQueue];
         id<MTLCommandBuffer> hook_buffer = [hook_queue commandBuffer];
         Method method = class_getInstanceMethod([hook_buffer class], @selector(presentDrawable:));
         test.original_present = method_setImplementation(method, reinterpret_cast<IMP>(present_hook));
         Method commit_method = class_getInstanceMethod([hook_buffer class], @selector(commit));
         test.original_commit = method_setImplementation(commit_method, reinterpret_cast<IMP>(commit_hook));
-        [window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
-        [CATransaction flush];
-        const double ready = CACurrentMediaTime() + 0.2;
-        while (CACurrentMediaTime() < ready)
-        {
-            NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]
-                inMode:NSDefaultRunLoopMode dequeue:YES];
-            if (event) [NSApp sendEvent:event];
-            [NSApp updateWindows];
-        }
+        Method ready_method = class_getInstanceMethod([test.overlay_queue class], @selector(signalDrawable:));
+        test.original_ready = method_setImplementation(ready_method, reinterpret_cast<IMP>(ready_hook));
         gpu::CommandPool* pool = gpu::create_command_pool(test.device);
         gpu::CommandBuffer* commands = gpu::begin_commands(pool);
         const gpu::SwapchainFrame target = gpu::acquire(commands);
@@ -160,23 +140,16 @@ int main(int argc, char** argv)
         pthread_create(&worker, nullptr, release_rendering, nullptr);
         gpu::submit_and_present(test.device, {.commands = {commands}, .waits = {{.semaphore = test.gate, .value = 1}},
             .completion = {.semaphore = test.rendered, .value = 1}});
-        while (!__atomic_load_n(&test.worker_done, __ATOMIC_ACQUIRE))
-        {
-            NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]
-                inMode:NSDefaultRunLoopMode dequeue:YES];
-            if (event) [NSApp sendEvent:event];
-            [NSApp updateWindows];
-        }
         pthread_join(worker, nullptr);
         gpu::wait_idle(test.device);
-        const bool presented = test.presented_early ||
-            dispatch_semaphore_wait(test.presented, dispatch_time(DISPATCH_TIME_NOW, 1000000000)) == 0;
-        const bool valid = test.scheduled_early && presented && !test.presented_early && test.completion_at_present == 1;
-        printf("%s: scheduled before rendering=%u, presented=%u, premature presentation=%u, overlay completion at presentation=%llu\n",
+        const bool ready = [test.drawable_ready waitUntilSignaledValue:1 timeoutMS:1000];
+        const bool valid = test.scheduled_early && ready && !test.readiness_early && test.overlay_completed.signaledValue == 1;
+        printf("%s: scheduled before rendering=%u, drawable ready=%u, premature readiness=%u, overlay completed=%llu\n",
             test.overlay_on_commit ? "Commit overlay" : test.overlay ? "Present overlay" : "No overlay",
-            test.scheduled_early, presented, test.presented_early, test.completion_at_present);
+            test.scheduled_early, ready, test.readiness_early, test.overlay_completed.signaledValue);
         method_setImplementation(method, test.original_present);
         method_setImplementation(commit_method, test.original_commit);
+        method_setImplementation(ready_method, test.original_ready);
         gpu::destroy_command_pool(pool);
         gpu::destroy_timeline_semaphore(test.rendered);
         gpu::destroy_timeline_semaphore(test.gate);
@@ -185,9 +158,8 @@ int main(int argc, char** argv)
         [test.overlay_queue signalEvent:test.overlay_completed value:2];
         [test.overlay_completed waitUntilSignaledValue:2 timeoutMS:1000];
         [hook_queue release]; [test.overlay_queue release]; [test.overlay_gate release]; [test.overlay_completed release];
-        [test.overlay_release release];
-        dispatch_release(test.scheduled); dispatch_release(test.presented);
-        [window close]; [window release];
+        [test.overlay_release release]; [test.drawable_ready release];
+        dispatch_release(test.scheduled);
         [layer release];
         return valid ? 0 : 1;
     }

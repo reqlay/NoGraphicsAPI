@@ -29,6 +29,7 @@ thread_local bool reject_first_device_only = false;
 thread_local bool hide_address_commands = false;
 thread_local uint32 device_extension_queries = 0;
 uint32 command_allocations = 0, command_frees = 0;
+VkImageUsageFlags last_view_usage = 0;
 uint32 failures = 0, reports = 0;
 bool reported_fatal = false;
 char diagnostic[2048]{};
@@ -119,8 +120,6 @@ TEST_CREATE(vkCreateSemaphore, (VkDevice device, const VkSemaphoreCreateInfo* in
     (device, info, allocator, semaphore), semaphores)
 TEST_CREATE(vkCreateImage, (VkDevice device, const VkImageCreateInfo* info, const VkAllocationCallbacks* allocator, VkImage* image),
     (device, info, allocator, image), images)
-TEST_CREATE(vkCreateImageView, (VkDevice device, const VkImageViewCreateInfo* info, const VkAllocationCallbacks* allocator, VkImageView* view),
-    (device, info, allocator, view), views)
 TEST_CREATE(vkCreateCommandPool, (VkDevice device, const VkCommandPoolCreateInfo* info, const VkAllocationCallbacks* allocator, VkCommandPool* pool),
     (device, info, allocator, pool), pools)
 TEST_CREATE(vkCreateQueryPool, (VkDevice device, const VkQueryPoolCreateInfo* info, const VkAllocationCallbacks* allocator, VkQueryPool* pool),
@@ -145,6 +144,18 @@ TEST_DESTROY(vkDestroyCommandPool, (VkDevice device, VkCommandPool pool, const V
 TEST_DESTROY(vkDestroyQueryPool, (VkDevice device, VkQueryPool pool, const VkAllocationCallbacks* allocator), (device, pool, allocator), pool, queries)
 TEST_DESTROY(vkDestroyPipeline, (VkDevice device, VkPipeline pipeline, const VkAllocationCallbacks* allocator),
     (device, pipeline, allocator), pipeline, pipelines)
+
+VkResult VKAPI_CALL test_vkCreateImageView(VkDevice device, const VkImageViewCreateInfo* info, const VkAllocationCallbacks* allocator, VkImageView* view)
+{
+    last_view_usage = 0;
+    for (const VkBaseInStructure* next = static_cast<const VkBaseInStructure*>(info->pNext); next; next = next->pNext)
+        if (next->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO)
+            last_view_usage = reinterpret_cast<const VkImageViewUsageCreateInfo*>(next)->usage;
+    if (inject("vkCreateImageView")) return failure_result;
+    const VkResult result = vkCreateImageView(device, info, allocator, view);
+    if (result == VK_SUCCESS) ++live.views;
+    return result;
+}
 
 VkResult VKAPI_CALL test_vkAllocateCommandBuffers(VkDevice device, const VkCommandBufferAllocateInfo* info, VkCommandBuffer* commands)
 {
@@ -335,7 +346,8 @@ void heap_failures(gpu::Device* device) noexcept
 
 void texture_failures(gpu::Device* device) noexcept
 {
-    const gpu::TextureDesc desc{.extent = {.x = 16, .y = 16, .z = 1}, .usage = gpu::TextureUsage::sampled | gpu::TextureUsage::color_attachment};
+    const gpu::TextureDesc desc{.extent = {.x = 16, .y = 16, .z = 1}, .srgb_views = true,
+        .usage = gpu::TextureUsage::sampled | gpu::TextureUsage::storage | gpu::TextureUsage::color_attachment};
     const gpu::SizeAlign size = gpu::get_texture_size_align(device, desc);
     check(size.size != 0, "ordinary texture requirements are available");
     if (!size.size) return;
@@ -370,6 +382,11 @@ void texture_failures(gpu::Device* device) noexcept
             reported("vkCreateImageView", before_view);
             gpu::RenderView* view = gpu::create_render_view(texture);
             check(view != nullptr, "render view creation succeeds after failure");
+            check(last_view_usage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "render views omit the parent texture's sampled/storage usages");
+            gpu::destroy_render_view(view);
+            view = gpu::create_render_view(texture, {.format = gpu::Format::rgba8_srgb});
+            check(view != nullptr, "sRGB attachment view does not require sRGB storage-image support");
+            check(last_view_usage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "sRGB render views restrict usage to color attachments");
             gpu::destroy_render_view(view);
             gpu::destroy_texture(texture);
         }

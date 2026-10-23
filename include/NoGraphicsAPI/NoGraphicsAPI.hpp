@@ -764,6 +764,7 @@ void destroy_texture_heap(const TextureHeap& heap) noexcept;
 // Creates an uninitialized texture without recording GPU commands. Views and descriptors can be created before initialize_texture().
 [[nodiscard]] Texture* create_texture(Device* device, const TextureDesc& desc, const TextureHeap& heap, uint64 offset) noexcept;
 void destroy_texture(Texture* texture) noexcept;
+// Requires the texture's matching color or depth/stencil attachment usage; other texture usages do not apply to this view.
 [[nodiscard]] RenderView* create_render_view(Texture* texture, const RenderViewDesc& desc = {}) noexcept;
 void destroy_render_view(RenderView* render_view) noexcept;
 // Descriptor slots form application-owned namespaces. Writes and copies require indices within capacity;

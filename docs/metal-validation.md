@@ -1,9 +1,10 @@
 # Metal validation
 
-The 18 October 2026 Release run on Apple A18 Pro, macOS 27.0.1, Xcode 27.1 and Slang 2026.20 passes
-**36 of 37 tests** with API and shader validation, subject to the instrumentation exceptions below. No tests are skipped.
+The 23 October 2026 Release run on Apple M3 Max, macOS 26.6.2 passes
+**42 of 43 tests** with API and shader validation, subject to the instrumentation exceptions below. No tests are skipped.
+All 11 affected API, texture-view, presentation and lifetime checks also pass in Debug.
 The remaining failure is the native render-timestamp issue below. The library and utilities also compile for arm64 iOS 26;
-this is compile coverage, not a device test. Earlier hardware coverage includes M3 Max.
+this is compile coverage, not a device test. Earlier hardware coverage includes A18 Pro.
 M1/M2 hardware execution remains unverified. The backend requires Metal 4, OS 26+ and Apple GPU family 7 or newer.
 
 ## Running the checks
@@ -21,10 +22,12 @@ Coverage includes shared root layouts, GPU pointers, descriptor indexing/copies,
 commands, texture transfers, viewport orientation, presentation and command-pool reuse. Triangle,
 cube and deferred-renderer examples run with Metal API validation.
 Presentation tests cover default and Steam-compatible modes with two and three drawables, two frames in flight,
-resize after idle, shutdown and the layer's framebuffer-only setting. On 22 October, all eight focused presentation and timeline-retirement
-checks pass on A18 Pro with API validation. The three overlay synchronization checks require a macOS window session and intercept classic
-presentation/commit to gate rendering and inject an optional delayed overlay write. They verify early scheduling and completion before drawable
-release; all three fail against the previous backend. These checks establish ordering, not fullscreen frame rate.
+resize after idle, shutdown and the layer's framebuffer-only setting. The three overlay synchronization checks intercept classic
+presentation/commit to gate rendering and inject an optional delayed overlay write. A GPU event following drawable readiness checks the
+handoff back to Metal 4 without depending on onscreen presentation or dropped-frame callbacks. No AppKit window is required.
+Negative controls detect late scheduling, missing drawable readiness, a missing overlay wait and completion signaled before commit-hook writes.
+Texture-view checks verify UNORM/sRGB attachment conversion and readback with and without storage-image usage on the parent texture.
+These checks establish ordering and pixel results, not fullscreen frame rate.
 The tests do not load Steam; overlay composition must also be checked in the installed game with `steam_overlay_compatibility` enabled.
 
 ## Concurrency and lifetime
