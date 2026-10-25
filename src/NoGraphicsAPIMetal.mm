@@ -595,6 +595,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             .texture_compression_astc = true,
             .storage_input_output16 = true,
             .indirect_mesh_draw = [device->metal supportsFamily:MTLGPUFamilyApple9],
+            .storage_push_constant16 = false,
         };
         if (desc.window)
         {

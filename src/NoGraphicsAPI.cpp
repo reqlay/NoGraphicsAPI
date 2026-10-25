@@ -1568,6 +1568,7 @@ struct Candidate
     bool texture_compression_astc = false;
     bool texture_compression_etc2 = false;
     bool storage_input_output16 = false;
+    bool storage_push_constant16 = false;
     bool khr_swapchain_maintenance1 = false;
     bool swapchain_maintenance = false;
     bool descriptor_heap = false;
@@ -1682,8 +1683,6 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         {.available = features.core.features.independentBlend, .name = "independentBlend"},
         {.available = features.core.features.fragmentStoresAndAtomics, .name = "fragmentStoresAndAtomics"},
         {.available = features.core.features.vertexPipelineStoresAndAtomics, .name = "vertexPipelineStoresAndAtomics"},
-        {.available = features.core.features.shaderStorageImageReadWithoutFormat, .name = "shaderStorageImageReadWithoutFormat"},
-        {.available = features.core.features.shaderStorageImageWriteWithoutFormat, .name = "shaderStorageImageWriteWithoutFormat"},
         {.available = features.core.features.multiDrawIndirect, .name = "multiDrawIndirect"},
         {.available = features.core.features.drawIndirectFirstInstance, .name = "drawIndirectFirstInstance"},
         {.available = features.vulkan11.storageBuffer16BitAccess, .name = "storageBuffer16BitAccess"},
@@ -1705,8 +1704,6 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         {.available = native_heap ? VK_TRUE : features.vulkan12.shaderStorageImageArrayNonUniformIndexing, .name = "shaderStorageImageArrayNonUniformIndexing"},
         {.available = features.mesh_shader.meshShader, .name = "meshShader"},
         {.available = features.mesh_shader.taskShader, .name = "taskShader"},
-        {.available = features.core.features.textureCompressionBC || features.core.features.textureCompressionASTC_LDR,
-            .name = "textureCompressionBC or textureCompressionASTC_LDR"},
     };
     for (const RequiredFeature& feature : required_features)
     {
@@ -1726,6 +1723,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
     result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
+    result.storage_push_constant16 = features.vulkan11.storagePushConstant16 == VK_TRUE;
     result.khr_swapchain_maintenance1 = khr_swapchain_maintenance1;
     result.swapchain_maintenance = surface && features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE;
 #if defined(NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION)
@@ -2122,12 +2120,11 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.core.features.textureCompressionETC2 = selected.texture_compression_etc2;
     enabled_features.core.features.fragmentStoresAndAtomics = VK_TRUE;
     enabled_features.core.features.vertexPipelineStoresAndAtomics = VK_TRUE;
-    enabled_features.core.features.shaderStorageImageReadWithoutFormat = VK_TRUE;
-    enabled_features.core.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
     enabled_features.core.features.multiDrawIndirect = VK_TRUE;
     enabled_features.core.features.drawIndirectFirstInstance = VK_TRUE;
     enabled_features.vulkan11.storageBuffer16BitAccess = VK_TRUE;
     enabled_features.vulkan11.storageInputOutput16 = selected.storage_input_output16;
+    enabled_features.vulkan11.storagePushConstant16 = selected.storage_push_constant16;
     enabled_features.vulkan11.shaderDrawParameters = VK_TRUE;
     enabled_features.vulkan12.shaderFloat16 = VK_TRUE;
     enabled_features.vulkan12.scalarBlockLayout = VK_TRUE;
@@ -2312,6 +2309,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .texture_compression_astc = selected.texture_compression_astc,
         .storage_input_output16 = selected.storage_input_output16,
         .indirect_mesh_draw = true,
+        .storage_push_constant16 = selected.storage_push_constant16,
     };
     if (presentation)
     {

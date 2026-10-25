@@ -28,7 +28,9 @@ thread_local gpu::Span<const char* const> advertised_instance_extensions{};
 thread_local bool reject_first_device_only = false;
 thread_local bool hide_address_commands = false;
 thread_local bool force_descriptor_buffer = false;
-thread_local bool hide_push_constant16 = false;
+thread_local bool hide_optional_features = false;
+thread_local VkBool32 enabled_input_output16 = VK_FALSE;
+thread_local VkBool32 enabled_push_constant16 = VK_FALSE;
 thread_local bool hide_required_features = false;
 thread_local uint32 advertised_api_version = 0;
 thread_local uint32 descriptor_layout_limit = 0;
@@ -74,10 +76,21 @@ VkResult VKAPI_CALL test_vkEnumerateDeviceExtensionProperties(VkPhysicalDevice p
 void VKAPI_CALL test_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFeatures2* features)
 {
     vkGetPhysicalDeviceFeatures2(physical, features);
+    if (hide_optional_features)
+    {
+        features->features.shaderStorageImageReadWithoutFormat = VK_FALSE;
+        features->features.shaderStorageImageWriteWithoutFormat = VK_FALSE;
+        features->features.textureCompressionBC = VK_FALSE;
+        features->features.textureCompressionASTC_LDR = VK_FALSE;
+    }
     for (VkBaseOutStructure* next = static_cast<VkBaseOutStructure*>(features->pNext); next; next = next->pNext)
     {
-        if (hide_push_constant16 && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
-            reinterpret_cast<VkPhysicalDeviceVulkan11Features*>(next)->storagePushConstant16 = VK_FALSE;
+        if (hide_optional_features && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
+        {
+            VkPhysicalDeviceVulkan11Features* vulkan11 = reinterpret_cast<VkPhysicalDeviceVulkan11Features*>(next);
+            vulkan11->storageInputOutput16 = VK_FALSE;
+            vulkan11->storagePushConstant16 = VK_FALSE;
+        }
         if (hide_required_features && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
         {
             VkPhysicalDeviceVulkan12Features* vulkan12 = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(next);
@@ -225,11 +238,23 @@ void VKAPI_CALL test_vkFreeCommandBuffers(VkDevice device, VkCommandPool pool, u
 VkResult VKAPI_CALL test_vkCreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* info,
                                        const VkAllocationCallbacks* allocator, VkDevice* device)
 {
+    enabled_input_output16 = VK_FALSE;
+    enabled_push_constant16 = VK_FALSE;
     for (const VkBaseInStructure* next = static_cast<const VkBaseInStructure*>(info->pNext); next; next = next->pNext)
     {
-        if (hide_push_constant16 && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES &&
-            reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(next)->storagePushConstant16)
-            return VK_ERROR_FEATURE_NOT_PRESENT;
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
+        {
+            const VkPhysicalDeviceVulkan11Features& features = *reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(next);
+            enabled_input_output16 = features.storageInputOutput16;
+            enabled_push_constant16 = features.storagePushConstant16;
+            if (hide_optional_features && (enabled_input_output16 || enabled_push_constant16)) return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
+        if (hide_optional_features && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+        {
+            const VkPhysicalDeviceFeatures& features = reinterpret_cast<const VkPhysicalDeviceFeatures2*>(next)->features;
+            if (features.shaderStorageImageReadWithoutFormat || features.shaderStorageImageWriteWithoutFormat ||
+                features.textureCompressionBC || features.textureCompressionASTC_LDR) return VK_ERROR_FEATURE_NOT_PRESENT;
+        }
     }
     if (inject("vkCreateDevice")) return failure_result;
     const VkResult result = vkCreateDevice(physical, info, allocator, device);
@@ -647,24 +672,55 @@ void pipeline_failures(gpu::Device* device) noexcept
     unchanged(before);
 }
 
-void unused_push_constant_feature(gpu::Device* device) noexcept
+void optional_capabilities(gpu::Device* device) noexcept
 {
     VkExtensionProperties extensions[gpu::max_device_extensions]{};
     uint32 count = 0;
     const bool buffer_available =
         gpu::enumerate_device_extensions(device->physical_device, {extensions, gpu::max_device_extensions}, count) == gpu::Error::none &&
         gpu::has_name({extensions, count}, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
+    VkPhysicalDeviceVulkan11Features reported{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+    VkPhysicalDeviceFeatures2 features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &reported};
+    vkGetPhysicalDeviceFeatures2(device->physical_device, &features);
     const NativeResources before = live;
-    hide_push_constant16 = true;
-    for (uint32 path = 0; path < (buffer_available ? 2u : 1u); ++path)
+    for (uint32 mode = 0; mode < (buffer_available ? 4u : 2u); ++mode)
     {
-        force_descriptor_buffer = path != 0;
+        force_descriptor_buffer = mode >= 2;
+        hide_optional_features = (mode & 1u) != 0;
         arm(nullptr);
         const gpu::DeviceInit init = gpu::create_device();
-        check(init.device && init.error == gpu::Error::none && reports == 0, "devices without 16-bit push constants initialize");
+        check(init.device && init.error == gpu::Error::none && reports == 0,
+            "devices initialize without optional 16-bit interfaces, compression, or legacy formatless feature bits");
         if (init.device)
         {
             check(!force_descriptor_buffer || !init.device->descriptor_heap, "the compatibility regression exercises descriptor buffers");
+            const gpu::DeviceCaps& caps = gpu::get_device_caps(init.device);
+            check(caps.storage_input_output16 == (!hide_optional_features && reported.storageInputOutput16 == VK_TRUE),
+                "the stage interface capability matches the driver's advertised support");
+            check(caps.storage_push_constant16 == (!hide_optional_features && reported.storagePushConstant16 == VK_TRUE),
+                "the push constant capability matches the driver's advertised support");
+            check(caps.storage_input_output16 == (enabled_input_output16 == VK_TRUE) &&
+                caps.storage_push_constant16 == (enabled_push_constant16 == VK_TRUE), "advertised 16-bit capabilities are actually enabled");
+            if (hide_optional_features)
+            {
+                check(!caps.texture_compression_bc && !caps.texture_compression_astc, "unavailable compression is reported through capabilities");
+                check(!gpu::supports_texture_format(init.device, gpu::Format::bc7_unorm, gpu::TextureUsage::sampled) &&
+                    !gpu::supports_texture_format(init.device, gpu::Format::astc_4x4_unorm, gpu::TextureUsage::sampled),
+                    "formats remain unavailable when their compression features are disabled");
+            }
+            check(gpu::supports_texture_format(init.device, gpu::Format::rgba8_unorm, gpu::TextureUsage::sampled),
+                "uncompressed sampled textures remain available");
+            VkFormatFeatureFlags2& format_features = init.device->format_features[static_cast<uint32>(gpu::Format::rgba8_unorm)];
+            const VkFormatFeatureFlags2 original = format_features;
+            constexpr VkFormatFeatureFlags2 required[]{VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT,
+                                                      VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT};
+            for (VkFormatFeatureFlags2 bit : required)
+            {
+                format_features = original & ~bit;
+                check(!gpu::supports_texture_format(init.device, gpu::Format::rgba8_unorm, gpu::TextureUsage::storage),
+                    "storage usage still requires both per-format read/write-without-format bits");
+            }
+            format_features = original;
             pipeline_failures(init.device);
             gpu::wait_idle(init.device);
             gpu::destroy_device(init.device);
@@ -672,7 +728,7 @@ void unused_push_constant_feature(gpu::Device* device) noexcept
         unchanged(before);
     }
     force_descriptor_buffer = false;
-    hide_push_constant16 = false;
+    hide_optional_features = false;
 }
 
 #if defined(_WIN32)
@@ -704,7 +760,7 @@ int main()
     gpu::Device* device = init.device;
     extension_failures(device);
     capability_failures();
-    unused_push_constant_feature(device);
+    optional_capabilities(device);
     descriptor_layout_limits(device);
     const NativeResources before_device = live;
     arm("vkCreateDevice");

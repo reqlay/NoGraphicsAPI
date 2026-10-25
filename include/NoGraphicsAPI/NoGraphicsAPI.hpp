@@ -471,8 +471,9 @@ struct DeviceCaps
     uint32 sub_texel_precision_bits = 0; // Fractional filtering precision, for conservative sampled-field bounds.
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
-    bool storage_input_output16 = false;
+    bool storage_input_output16 = false; // 16-bit shader stage inputs/outputs; enabled on Vulkan only when advertised.
     bool indirect_mesh_draw = false;
+    bool storage_push_constant16 = false; // Vulkan-only capability; not needed for 16-bit members of GPU roots.
 };
 
 enum class ColorSpace : uint32 { srgb, extended_srgb_linear };

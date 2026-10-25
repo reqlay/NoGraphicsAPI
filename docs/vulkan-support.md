@@ -34,8 +34,8 @@ conventional feature checked by device creation.
 | Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
 | Timeline semaphores | Application-visible completion points and cross-queue waits; private swapchain retirement. |
 | 64-bit timestamps (optional) | Supported queues capture GPU markers; `read_timestamps(pool)` retrieves them into CPU memory after submission completion. |
-| Shader and layout features | Scalar layout, float16, 16-bit storage access, draw parameters, independent blending, and formatless storage-image access. |
-| Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
+| Shader and layout features | Scalar layout, float16, 16-bit storage access, draw parameters, and independent blending. |
+| Texture features | Compression is reported through `DeviceCaps`; exact format and usage support is queried with `supports_texture_format`. |
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_get_surface_capabilities2`, and `VK_KHR_swapchain`. |
 
 Windowed devices use `VK_KHR_surface_maintenance1` and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]
@@ -43,6 +43,17 @@ when available, with the original EXT variants also accepted. Swapchain maintena
 fence for each presentation. Drivers without maintenance use core presentation with one render-finished
 semaphore per swapchain image and a presentation-queue wait at swapchain replacement and shutdown.
 Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
+
+`DeviceCaps::storage_input_output16` and `storage_push_constant16` reflect the advertised Vulkan features
+and are enabled only when supported. Neither is required to create a device. The former permits 16-bit
+shader stage interfaces; the latter describes Vulkan push-constant storage, not pointed-to root members.
+Metal reports 16-bit stage interfaces and leaves the Vulkan-only push-constant flag false.
+
+Storage-image usage requires per-format read/write-without-format support. Vulkan 1.3+ permits these
+[SPIR-V capabilities](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html) independently of the legacy
+`shaderStorageImageReadWithoutFormat` and `shaderStorageImageWriteWithoutFormat` feature bits; those bits
+are neither required nor enabled. BC/ASTC compression is also optional for device creation; applications
+must check their asset formats before using them.
 
 ## GPU heaps and application-side allocation
 
@@ -176,7 +187,7 @@ See Vulkan's [memory aliasing rules](https://docs.vulkan.org/spec/latest/chapter
 Each draw, mesh draw, and dispatch accepts a GPU root pointer. The backend pushes that eight-byte
 address with `vkCmdPushDataEXT` on native heaps or `vkCmdPushConstants` on descriptor buffers;
 it neither allocates storage nor copies the root structure. Only the address occupies push constants, so
-`storagePushConstant16` is not required or enabled; 16-bit root members are loaded from GPU memory.
+16-bit root members are loaded from GPU memory independently of `DeviceCaps::storage_push_constant16`.
 One root is shared by all active graphics stages. Roots may contain typed GPU pointers, texture and
 sampler indices, and scalar, vector and matrix values.
 
