@@ -1576,14 +1576,14 @@ struct Candidate
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
     const char* missing_extensions[5]{};
     uint32 missing_extension_count = 0;
+    char rejection_reason[1536]{};
 };
 
-void append_capability_diagnostic(Span<char> message, const char* subject, Span<const char* const> missing_extensions) noexcept
+void append_capability_diagnostic(Span<char> message, const char* subject, Span<const char* const> missing_extensions,
+                                  const char* reason = "missing required Vulkan extensions:") noexcept
 {
     size_t length = strlen(message.data);
-    snprintf(message.data + length, message.size - length, "\n%s: %s", subject, missing_extensions.size
-        ? "missing required Vulkan extensions:"
-        : "required Vulkan 1.4, memory, shader, or presentation capabilities are unavailable.");
+    snprintf(message.data + length, message.size - length, "\n%s: %s", subject, reason);
     for (size_t index = 0; index < missing_extensions.size; ++index)
     {
         length = strlen(message.data);
@@ -1598,7 +1598,10 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     uint32 extension_count = 0;
     const Error extension_error = enumerate_device_extensions(physical_device, {extensions, max_device_extensions}, extension_count);
     if (extension_error != Error::none)
+    {
+        snprintf(output.rejection_reason, sizeof(output.rejection_reason), "device extension enumeration exceeds backend capacity.");
         return extension_error;
+    }
     const bool unified_image_layouts_extension = has_name(
         {extensions, extension_count},
         VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
@@ -1643,7 +1646,12 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.descriptor_properties.pNext = nullptr;
     result.vulkan12_properties.pNext = nullptr;
     if (result.properties.apiVersion < VK_API_VERSION_1_4)
+    {
+        snprintf(output.rejection_reason, sizeof(output.rejection_reason), "Vulkan %u.%u.%u reported; Vulkan 1.4 is required.",
+            VK_API_VERSION_MAJOR(result.properties.apiVersion), VK_API_VERSION_MINOR(result.properties.apiVersion),
+            VK_API_VERSION_PATCH(result.properties.apiVersion));
         return Error::unsupported;
+    }
 
     vkGetPhysicalDeviceMemoryProperties(physical_device, &result.memory_properties);
     bool cpu_visible_memory = false;
@@ -1656,44 +1664,59 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
             break;
         }
     }
-    if (!cpu_visible_memory) return Error::unsupported;
+    if (!cpu_visible_memory)
+    {
+        snprintf(output.rejection_reason, sizeof(output.rejection_reason), "no device-local, host-visible, host-coherent memory type is available.");
+        return Error::unsupported;
+    }
 
     const bool address_commands_extension = has_name({extensions, extension_count}, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME);
     QueriedFeatures features(surface && (khr_swapchain_maintenance1 || ext_swapchain_maintenance1),
                              unified_image_layouts_extension, address_commands_extension, native_heap);
     vkGetPhysicalDeviceFeatures2(physical_device, &features.core);
-    const bool required_features =
-        features.core.features.shaderInt16 == VK_TRUE &&
-        features.core.features.samplerAnisotropy == VK_TRUE &&
-        features.core.features.depthBiasClamp == VK_TRUE &&
-        features.core.features.independentBlend == VK_TRUE &&
-        features.core.features.fragmentStoresAndAtomics == VK_TRUE &&
-        features.core.features.vertexPipelineStoresAndAtomics == VK_TRUE &&
-        features.core.features.shaderStorageImageReadWithoutFormat == VK_TRUE &&
-        features.core.features.shaderStorageImageWriteWithoutFormat == VK_TRUE &&
-        features.core.features.multiDrawIndirect == VK_TRUE &&
-        features.core.features.drawIndirectFirstInstance == VK_TRUE &&
-        features.vulkan11.storageBuffer16BitAccess == VK_TRUE &&
-        features.vulkan11.storagePushConstant16 == VK_TRUE &&
-        features.vulkan11.shaderDrawParameters == VK_TRUE &&
-        features.vulkan12.shaderFloat16 == VK_TRUE &&
-        features.vulkan12.scalarBlockLayout == VK_TRUE &&
-        features.vulkan12.bufferDeviceAddress == VK_TRUE &&
-        features.vulkan12.timelineSemaphore == VK_TRUE &&
-        features.vulkan13.synchronization2 == VK_TRUE &&
-        features.vulkan13.dynamicRendering == VK_TRUE &&
-        features.vulkan13.maintenance4 == VK_TRUE &&
-        features.vulkan14.maintenance5 == VK_TRUE &&
-        (native_heap ? (features.descriptor_heap.descriptorHeap == VK_TRUE && features.untyped_pointers.shaderUntypedPointers == VK_TRUE)
-                     : (features.descriptor_buffer.descriptorBuffer == VK_TRUE && features.vulkan12.descriptorBindingVariableDescriptorCount == VK_TRUE &&
-                        features.vulkan12.runtimeDescriptorArray == VK_TRUE && features.vulkan12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
-                        features.vulkan12.shaderStorageImageArrayNonUniformIndexing == VK_TRUE)) &&
-        features.mesh_shader.meshShader == VK_TRUE &&
-        features.mesh_shader.taskShader == VK_TRUE &&
-        (features.core.features.textureCompressionBC == VK_TRUE ||
-         features.core.features.textureCompressionASTC_LDR == VK_TRUE);
-    if (!required_features)
-        return Error::unsupported;
+    struct RequiredFeature { VkBool32 available; const char* name; };
+    const RequiredFeature required_features[]{
+        {.available = features.core.features.shaderInt16, .name = "shaderInt16"},
+        {.available = features.core.features.samplerAnisotropy, .name = "samplerAnisotropy"},
+        {.available = features.core.features.depthBiasClamp, .name = "depthBiasClamp"},
+        {.available = features.core.features.independentBlend, .name = "independentBlend"},
+        {.available = features.core.features.fragmentStoresAndAtomics, .name = "fragmentStoresAndAtomics"},
+        {.available = features.core.features.vertexPipelineStoresAndAtomics, .name = "vertexPipelineStoresAndAtomics"},
+        {.available = features.core.features.shaderStorageImageReadWithoutFormat, .name = "shaderStorageImageReadWithoutFormat"},
+        {.available = features.core.features.shaderStorageImageWriteWithoutFormat, .name = "shaderStorageImageWriteWithoutFormat"},
+        {.available = features.core.features.multiDrawIndirect, .name = "multiDrawIndirect"},
+        {.available = features.core.features.drawIndirectFirstInstance, .name = "drawIndirectFirstInstance"},
+        {.available = features.vulkan11.storageBuffer16BitAccess, .name = "storageBuffer16BitAccess"},
+        {.available = features.vulkan11.shaderDrawParameters, .name = "shaderDrawParameters"},
+        {.available = features.vulkan12.shaderFloat16, .name = "shaderFloat16"},
+        {.available = features.vulkan12.scalarBlockLayout, .name = "scalarBlockLayout"},
+        {.available = features.vulkan12.bufferDeviceAddress, .name = "bufferDeviceAddress"},
+        {.available = features.vulkan12.timelineSemaphore, .name = "timelineSemaphore"},
+        {.available = features.vulkan13.synchronization2, .name = "synchronization2"},
+        {.available = features.vulkan13.dynamicRendering, .name = "dynamicRendering"},
+        {.available = features.vulkan13.maintenance4, .name = "maintenance4"},
+        {.available = features.vulkan14.maintenance5, .name = "maintenance5"},
+        {.available = native_heap ? features.descriptor_heap.descriptorHeap : VK_TRUE, .name = "descriptorHeap"},
+        {.available = native_heap ? features.untyped_pointers.shaderUntypedPointers : VK_TRUE, .name = "shaderUntypedPointers"},
+        {.available = native_heap ? VK_TRUE : features.descriptor_buffer.descriptorBuffer, .name = "descriptorBuffer"},
+        {.available = native_heap ? VK_TRUE : features.vulkan12.descriptorBindingVariableDescriptorCount, .name = "descriptorBindingVariableDescriptorCount"},
+        {.available = native_heap ? VK_TRUE : features.vulkan12.runtimeDescriptorArray, .name = "runtimeDescriptorArray"},
+        {.available = native_heap ? VK_TRUE : features.vulkan12.shaderSampledImageArrayNonUniformIndexing, .name = "shaderSampledImageArrayNonUniformIndexing"},
+        {.available = native_heap ? VK_TRUE : features.vulkan12.shaderStorageImageArrayNonUniformIndexing, .name = "shaderStorageImageArrayNonUniformIndexing"},
+        {.available = features.mesh_shader.meshShader, .name = "meshShader"},
+        {.available = features.mesh_shader.taskShader, .name = "taskShader"},
+        {.available = features.core.features.textureCompressionBC || features.core.features.textureCompressionASTC_LDR,
+            .name = "textureCompressionBC or textureCompressionASTC_LDR"},
+    };
+    for (const RequiredFeature& feature : required_features)
+    {
+        if (feature.available == VK_TRUE) continue;
+        if (!output.rejection_reason[0])
+            snprintf(output.rejection_reason, sizeof(output.rejection_reason), "missing required Vulkan features:");
+        const size_t length = strlen(output.rejection_reason);
+        snprintf(output.rejection_reason + length, sizeof(output.rejection_reason) - length, "\n  %s", feature.name);
+    }
+    if (output.rejection_reason[0]) return Error::unsupported;
     result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
 #if !defined(NOGRAPHICSAPI_TEST_BUFFER_COMMANDS)
     result.address_commands = address_commands_extension && features.address_commands.deviceAddressCommands == VK_TRUE;
@@ -1713,7 +1736,11 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     uint32 available_queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &available_queue_count, nullptr);
     if (available_queue_count > max_queue_families)
+    {
+        snprintf(output.rejection_reason, sizeof(output.rejection_reason), "queue family count %u exceeds backend capacity %u.",
+            available_queue_count, max_queue_families);
         return Error::unsupported;
+    }
     VkQueueFamilyProperties queues[max_queue_families]{};
     uint32 queue_count = available_queue_count;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &queue_count, queues);
@@ -1767,7 +1794,13 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     }
     if (result.queue_counts[0] == 0 || (desc.desired_compute_queue_count && result.queue_counts[1] == 0) ||
         (desc.desired_copy_queue_count && result.queue_counts[2] == 0))
+    {
+        snprintf(output.rejection_reason, sizeof(output.rejection_reason), "required queue families unavailable:%s%s%s",
+            result.queue_counts[0] ? "" : (surface ? " graphics + compute + presentation" : " graphics + compute"),
+            desc.desired_compute_queue_count && !result.queue_counts[1] ? " dedicated compute" : "",
+            desc.desired_copy_queue_count && !result.queue_counts[2] ? " dedicated copy" : "");
         return Error::unsupported;
+    }
 
     output = result;
     return Error::none;
@@ -2044,7 +2077,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
                 VkPhysicalDeviceProperties properties{};
                 vkGetPhysicalDeviceProperties(physical_device, &properties);
                 append_capability_diagnostic(candidate_diagnostics, properties.deviceName,
-                    {candidate.missing_extensions, candidate.missing_extension_count});
+                    {candidate.missing_extensions, candidate.missing_extension_count},
+                    candidate.missing_extension_count ? "missing required Vulkan extensions:" : candidate.rejection_reason);
             }
             continue;
         }
@@ -2093,7 +2127,6 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.core.features.multiDrawIndirect = VK_TRUE;
     enabled_features.core.features.drawIndirectFirstInstance = VK_TRUE;
     enabled_features.vulkan11.storageBuffer16BitAccess = VK_TRUE;
-    enabled_features.vulkan11.storagePushConstant16 = VK_TRUE;
     enabled_features.vulkan11.storageInputOutput16 = selected.storage_input_output16;
     enabled_features.vulkan11.shaderDrawParameters = VK_TRUE;
     enabled_features.vulkan12.shaderFloat16 = VK_TRUE;

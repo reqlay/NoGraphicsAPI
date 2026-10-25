@@ -34,7 +34,7 @@ conventional feature checked by device creation.
 | Core Vulkan dynamic state | Command-set viewport, scissor, and exposed depth/stencil state. |
 | Timeline semaphores | Application-visible completion points and cross-queue waits; private swapchain retirement. |
 | 64-bit timestamps (optional) | Supported queues capture GPU markers; `read_timestamps(pool)` retrieves them into CPU memory after submission completion. |
-| Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
+| Shader and layout features | Scalar layout, float16, 16-bit storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
 | Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_get_surface_capabilities2`, and `VK_KHR_swapchain`. |
 
@@ -175,7 +175,8 @@ See Vulkan's [memory aliasing rules](https://docs.vulkan.org/spec/latest/chapter
 
 Each draw, mesh draw, and dispatch accepts a GPU root pointer. The backend pushes that eight-byte
 address with `vkCmdPushDataEXT` on native heaps or `vkCmdPushConstants` on descriptor buffers;
-it neither allocates storage nor copies the root structure.
+it neither allocates storage nor copies the root structure. Only the address occupies push constants, so
+`storagePushConstant16` is not required or enabled; 16-bit root members are loaded from GPU memory.
 One root is shared by all active graphics stages. Roots may contain typed GPU pointers, texture and
 sampler indices, and scalar, vector and matrix values.
 

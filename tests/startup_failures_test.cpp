@@ -27,6 +27,10 @@ thread_local gpu::Span<const char* const> advertised_device_extensions{};
 thread_local gpu::Span<const char* const> advertised_instance_extensions{};
 thread_local bool reject_first_device_only = false;
 thread_local bool hide_address_commands = false;
+thread_local bool force_descriptor_buffer = false;
+thread_local bool hide_push_constant16 = false;
+thread_local bool hide_required_features = false;
+thread_local uint32 advertised_api_version = 0;
 thread_local uint32 descriptor_layout_limit = 0;
 thread_local uint32 device_extension_queries = 0;
 uint32 command_allocations = 0, command_frees = 0;
@@ -53,18 +57,40 @@ VkResult VKAPI_CALL test_vkEnumerateDeviceExtensionProperties(VkPhysicalDevice p
     if (advertised_device_extensions.data && (!reject_first_device_only || device_extension_queries++ == 0))
         return enumerate_extensions(advertised_device_extensions, count, values);
     const VkResult result = vkEnumerateDeviceExtensionProperties(physical, layer, count, values);
-    if ((hide_address_commands || descriptor_layout_limit) && values && result == VK_SUCCESS)
+    if ((hide_address_commands || force_descriptor_buffer || descriptor_layout_limit) && values && result == VK_SUCCESS)
     {
         uint32 written = 0;
         for (uint32 index = 0; index < *count; ++index)
         {
             if (hide_address_commands && !strcmp(values[index].extensionName, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME)) continue;
-            if (descriptor_layout_limit && !strcmp(values[index].extensionName, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)) continue;
+            if ((force_descriptor_buffer || descriptor_layout_limit) && !strcmp(values[index].extensionName, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)) continue;
             values[written++] = values[index];
         }
         *count = written;
     }
     return result;
+}
+
+void VKAPI_CALL test_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkPhysicalDeviceFeatures2* features)
+{
+    vkGetPhysicalDeviceFeatures2(physical, features);
+    for (VkBaseOutStructure* next = static_cast<VkBaseOutStructure*>(features->pNext); next; next = next->pNext)
+    {
+        if (hide_push_constant16 && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
+            reinterpret_cast<VkPhysicalDeviceVulkan11Features*>(next)->storagePushConstant16 = VK_FALSE;
+        if (hide_required_features && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+        {
+            VkPhysicalDeviceVulkan12Features* vulkan12 = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(next);
+            vulkan12->shaderFloat16 = VK_FALSE;
+            vulkan12->bufferDeviceAddress = VK_FALSE;
+        }
+    }
+}
+
+void VKAPI_CALL test_vkGetPhysicalDeviceProperties2(VkPhysicalDevice physical, VkPhysicalDeviceProperties2* properties)
+{
+    vkGetPhysicalDeviceProperties2(physical, properties);
+    if (advertised_api_version) properties->properties.apiVersion = advertised_api_version;
 }
 
 void VKAPI_CALL test_vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* info, VkDescriptorSetLayoutSupport* support)
@@ -133,8 +159,6 @@ bool inject(const char* operation) noexcept
 
 TEST_CREATE(vkCreateInstance, (const VkInstanceCreateInfo* info, const VkAllocationCallbacks* allocator, VkInstance* instance),
     (info, allocator, instance), instances)
-TEST_CREATE(vkCreateDevice, (VkPhysicalDevice physical, const VkDeviceCreateInfo* info, const VkAllocationCallbacks* allocator, VkDevice* device),
-    (physical, info, allocator, device), devices)
 TEST_CREATE(vkCreateBuffer, (VkDevice device, const VkBufferCreateInfo* info, const VkAllocationCallbacks* allocator, VkBuffer* buffer),
     (device, info, allocator, buffer), buffers)
 TEST_CREATE(vkAllocateMemory, (VkDevice device, const VkMemoryAllocateInfo* info, const VkAllocationCallbacks* allocator, VkDeviceMemory* memory),
@@ -197,6 +221,21 @@ void VKAPI_CALL test_vkFreeCommandBuffers(VkDevice device, VkCommandPool pool, u
 #undef TEST_CREATE
 #undef TEST_DESTROY
 #undef TEST_RESULT
+
+VkResult VKAPI_CALL test_vkCreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo* info,
+                                       const VkAllocationCallbacks* allocator, VkDevice* device)
+{
+    for (const VkBaseInStructure* next = static_cast<const VkBaseInStructure*>(info->pNext); next; next = next->pNext)
+    {
+        if (hide_push_constant16 && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES &&
+            reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(next)->storagePushConstant16)
+            return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+    if (inject("vkCreateDevice")) return failure_result;
+    const VkResult result = vkCreateDevice(physical, info, allocator, device);
+    if (result == VK_SUCCESS) ++live.devices;
+    return result;
+}
 }
 
 // Inject only the test translation unit's native calls; normal calls still use the real driver.
@@ -204,6 +243,8 @@ void VKAPI_CALL test_vkFreeCommandBuffers(VkDevice device, VkCommandPool pool, u
 #define vkEnumerateDeviceExtensionProperties test_vkEnumerateDeviceExtensionProperties
 #define vkEnumerateInstanceExtensionProperties test_vkEnumerateInstanceExtensionProperties
 #define vkEnumeratePhysicalDevices test_vkEnumeratePhysicalDevices
+#define vkGetPhysicalDeviceFeatures2 test_vkGetPhysicalDeviceFeatures2
+#define vkGetPhysicalDeviceProperties2 test_vkGetPhysicalDeviceProperties2
 #define vkGetDescriptorSetLayoutSupport test_vkGetDescriptorSetLayoutSupport
 #define vkCreateDevice test_vkCreateDevice
 #define vkCreateBuffer test_vkCreateBuffer
@@ -363,6 +404,29 @@ void descriptor_layout_limits(gpu::Device* device) noexcept
         gpu::destroy_device(init.device);
     }
     descriptor_layout_limit = 0;
+    unchanged(before);
+}
+
+void capability_failures() noexcept
+{
+    const NativeResources before = live;
+    hide_required_features = true;
+    arm(nullptr);
+    gpu::DeviceInit init = gpu::create_device();
+    check(!init.device && init.error == gpu::Error::unsupported && reports == 1, "missing required features reject the device with one diagnostic");
+    check(strstr(diagnostic, "missing required Vulkan features:") && strstr(diagnostic, "shaderFloat16") && strstr(diagnostic, "bufferDeviceAddress"),
+        "the diagnostic names every missing queried feature");
+    check(!strstr(diagnostic, "storagePushConstant16") && !strstr(diagnostic, "memory, shader, or presentation"),
+        "the feature diagnostic omits unused features and the ambiguous catch-all");
+    hide_required_features = false;
+    unchanged(before);
+
+    advertised_api_version = VK_MAKE_API_VERSION(0, 1, 3, 280);
+    arm(nullptr);
+    init = gpu::create_device();
+    check(!init.device && init.error == gpu::Error::unsupported && reports == 1, "an old Vulkan API version rejects the device");
+    check(strstr(diagnostic, "Vulkan 1.3.280 reported; Vulkan 1.4 is required."), "the version diagnostic includes the actual driver API version");
+    advertised_api_version = 0;
     unchanged(before);
 }
 
@@ -583,6 +647,34 @@ void pipeline_failures(gpu::Device* device) noexcept
     unchanged(before);
 }
 
+void unused_push_constant_feature(gpu::Device* device) noexcept
+{
+    VkExtensionProperties extensions[gpu::max_device_extensions]{};
+    uint32 count = 0;
+    const bool buffer_available =
+        gpu::enumerate_device_extensions(device->physical_device, {extensions, gpu::max_device_extensions}, count) == gpu::Error::none &&
+        gpu::has_name({extensions, count}, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME);
+    const NativeResources before = live;
+    hide_push_constant16 = true;
+    for (uint32 path = 0; path < (buffer_available ? 2u : 1u); ++path)
+    {
+        force_descriptor_buffer = path != 0;
+        arm(nullptr);
+        const gpu::DeviceInit init = gpu::create_device();
+        check(init.device && init.error == gpu::Error::none && reports == 0, "devices without 16-bit push constants initialize");
+        if (init.device)
+        {
+            check(!force_descriptor_buffer || !init.device->descriptor_heap, "the compatibility regression exercises descriptor buffers");
+            pipeline_failures(init.device);
+            gpu::wait_idle(init.device);
+            gpu::destroy_device(init.device);
+        }
+        unchanged(before);
+    }
+    force_descriptor_buffer = false;
+    hide_push_constant16 = false;
+}
+
 #if defined(_WIN32)
 DWORD WINAPI callback_thread(void*) noexcept
 {
@@ -611,6 +703,8 @@ int main()
     if (!init.device) return 1;
     gpu::Device* device = init.device;
     extension_failures(device);
+    capability_failures();
+    unused_push_constant_feature(device);
     descriptor_layout_limits(device);
     const NativeResources before_device = live;
     arm("vkCreateDevice");
