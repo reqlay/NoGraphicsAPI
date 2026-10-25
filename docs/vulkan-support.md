@@ -25,8 +25,7 @@ conventional feature checked by device creation.
 | Requirement | Contribution to the model |
 |---|---|
 | Vulkan 1.4 and `maintenance5` | Modern pipeline creation, including inline shader code without temporary shader modules. |
-| [`VK_EXT_descriptor_heap`][descriptor-heap] | Application-owned heaps, host descriptor writes, layout-free pipelines, and `vkCmdPushDataEXT`. |
-| [`VK_KHR_shader_untyped_pointers`][untyped-pointers] | Supplies the shader-untyped-pointer capability required by the descriptor-heap SPIR-V path. |
+| [`VK_EXT_descriptor_heap`][descriptor-heap] with [`VK_KHR_shader_untyped_pointers`][untyped-pointers], or `VK_EXT_descriptor_buffer` | Native heaps use layout-free pipelines and `vkCmdPushDataEXT`; descriptor buffers use private layouts and an eight-byte root push constant. |
 | [`VK_KHR_device_address_commands`][address-commands] (optional) | Index, indirect, and copy commands consume GPU addresses directly. Otherwise addresses resolve to buffers and offsets. |
 | [`VK_KHR_unified_image_layouts`][unified-layouts] (optional) | Optimizes ordinary `GENERAL` image use; the public model is unchanged without it. |
 | [`VK_EXT_mesh_shader`][mesh-shader] | Required task and mesh shader support for direct and indirect workgroup draws. |
@@ -37,12 +36,12 @@ conventional feature checked by device creation.
 | 64-bit timestamps (optional) | Supported queues capture GPU markers; `read_timestamps(pool)` retrieves them into CPU memory after submission completion. |
 | Shader and layout features | Scalar layout, float16, 16-bit push/storage access, draw parameters, independent blending, and formatless storage-image access. |
 | Texture features | At least BC or ASTC LDR compression; exact format and usage support remains queryable. |
-| Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_swapchain`, and the maintenance extensions listed below. |
+| Win32 WSI | `VK_KHR_surface`, `VK_KHR_win32_surface`, `VK_KHR_get_surface_capabilities2`, and `VK_KHR_swapchain`. |
 
-Windowed devices also require `VK_KHR_get_surface_capabilities2`,
-`VK_KHR_surface_maintenance1`, and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]. The
-original EXT variants are accepted as a paired fallback. Swapchain maintenance supplies a completion
-fence for each presentation.
+Windowed devices use `VK_KHR_surface_maintenance1` and [`VK_KHR_swapchain_maintenance1`][swapchain-maintenance]
+when available, with the original EXT variants also accepted. Swapchain maintenance supplies a completion
+fence for each presentation. Drivers without maintenance use core presentation with one render-finished
+semaphore per swapchain image and a presentation-queue wait at swapchain replacement and shutdown.
 Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when available.
 
 ## GPU heaps and application-side allocation
@@ -102,7 +101,7 @@ owning heap. Buffers therefore never need descriptor slots.
 | `dispatch_indirect()` | `vkCmdDispatchIndirect2KHR`. |
 | Buffer and texture copies | `vkCmdCopyMemoryKHR`, `vkCmdCopyMemoryToImageKHR`, and `vkCmdCopyImageToMemoryKHR`. |
 
-Vulkan always reports `DeviceCaps::indirect_mesh_draw`; the required mesh and device-address-command extensions provide it.
+Vulkan always reports `DeviceCaps::indirect_mesh_draw`; the required mesh extension provides both address-based and buffer-based indirect commands.
 
 Address commands use fully bound storage-buffer ranges. Interior ranges are valid, so applications
 can suballocate and pass only the relevant byte interval. Interior-pointer alignment, bounds, and
@@ -120,11 +119,12 @@ then copy those bytes to private mapped storage. `copy_texture_descriptors()` an
 copy indexed ranges through that CPU array, including overlapping ranges, without reading mapped GPU memory.
 Native bytes, strides, reserved regions, and GPU addresses remain private.
 
-`set_texture_descriptor_heap()` and `set_sampler_descriptor_heap()` bind those heaps. Shaders retain
-native resource and sampler heap access through the shared `gpu_texture` and `gpu_sampler`
-helpers; heap-using shaders compile for
-[`SPV_EXT_descriptor_heap`][spirv-heap]. Arbitrary GPU writes or copies of descriptor bytes are not part of
-this portable contract.
+`set_texture_descriptor_heap()` and `set_sampler_descriptor_heap()` bind those heaps. Shared `gpu_texture`
+and `gpu_sampler` helpers use native [`SPV_EXT_descriptor_heap`][spirv-heap] access or descriptor-buffer
+arrays selected at shader compilation. The latter keeps separate sampled/storage planes with the same
+application indices, and retains native image views and samplers until their final descriptor copy is overwritten or destroyed.
+Descriptor writes encode into cached CPU storage before copying to write-only GPU mappings on both paths.
+Arbitrary GPU writes or copies of descriptor bytes are not part of this portable contract.
 
 Texture views can select a compatible format only when `TextureDesc::mutable_format` is enabled;
 they can select a mip/layer range and color, depth, or stencil aspect. The default
@@ -171,7 +171,8 @@ See Vulkan's [memory aliasing rules](https://docs.vulkan.org/spec/latest/chapter
 ## Root ABI
 
 Each draw, mesh draw, and dispatch accepts a GPU root pointer. The backend pushes that eight-byte
-address with `vkCmdPushDataEXT`; it neither allocates storage nor copies the root structure.
+address with `vkCmdPushDataEXT` on native heaps or `vkCmdPushConstants` on descriptor buffers;
+it neither allocates storage nor copies the root structure.
 One root is shared by all active graphics stages. Roots may contain typed GPU pointers, texture and
 sampler indices, and scalar, vector and matrix values.
 
@@ -180,14 +181,15 @@ CPU-written roots, use a `BumpAllocator` over mapped storage protected by a fram
 can produce roots for later draws/dispatches; synchronize writes with `Access::shader_read` at the
 consuming stages. That access includes uniform-buffer reads. See [the root contract](slang.md#root-and-pointer-layout).
 
-Pipelines are created with `VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT` and a null pipeline layout.
-The backend never records push constants, descriptor sets, descriptor buffers, or push descriptors,
-so command buffers remain entirely in descriptor-heap mode.
+Native heap pipelines use `VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT` and a null pipeline layout.
+Descriptor-buffer pipelines use `VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT`, fixed internal descriptor layouts,
+and descriptor-buffer binding/offset commands. Neither path allocates, updates or binds descriptor sets.
 
-The shader's binding-zero uniform buffer maps directly to the address in push data through
+On native heaps, the shader's binding-zero uniform buffer maps directly to the address in push data through
 [`VK_DESCRIPTOR_MAPPING_SOURCE_PUSH_ADDRESS_EXT`](https://docs.vulkan.org/refpages/latest/refpages/source/VkDescriptorSetAndBindingMappingEXT.html).
 This preserves uniform-buffer access instead of physical-storage-buffer loads through a BDA pointer,
 allowing the driver to use its constant-buffer optimizations and prefetch paths.
+The descriptor-buffer variant loads the same root through a typed GPU pointer with the declared alignment.
 BDA can receive equivalent optimizations, so any performance advantage depends on the GPU, driver and workload.
 There is no root descriptor or descriptor-set binding. The shader ABI changes from a full push-data
 structure to one address; rebuild existing Vulkan shader binaries. Separate roots per stage and
@@ -217,8 +219,11 @@ for actual read/write hazards and use timeline points for reuse of mutable CPU/G
 
 ## Pipelines, rendering, and mesh work
 
-Graphics, mesh, and compute PSOs accept `ShaderStage` with SPIR-V in byte-sized `code`,
+Graphics, mesh, and compute PSOs accept `ShaderStage` with a `.shader` shader package in byte-sized `code`,
 and an explicit `entry_point` (default `main`). Vulkan ignores `threadgroup_size`; SPIR-V carries that metadata.
+The [public shader build helper](slang.md#build-and-stage-artifacts) packages both binding variants from one source.
+PSO creation selects the device's variant without runtime compilation or translation. Native heaps retain native SPIR-V;
+descriptor-buffer devices use the separately compiled variant. Raw native-heap SPIR-V remains supported on native heaps.
 Vulkan 1.4 maintenance5 lets pipeline
 stages take inline `VkShaderModuleCreateInfo`, and descriptor-heap pipelines need no pipeline
 layout. Graphics and mesh PSOs retain attachment compatibility, rasterization, and blend state;
@@ -306,6 +311,8 @@ Windowed device creation/destruction, drawable queries, acquire, and presentatio
 message-pump thread; other work follows the threading rules above. Binary WSI semaphores remain private, while
 `VK_KHR_swapchain_maintenance1` present fences support safe reuse and swapchain replacement without
 draining unrelated queue work.
+Core presentation reuses an image's render-finished semaphore after that image is acquired again. Its
+resize/shutdown path uses device idle and has no maintenance present-completion fence.
 
 `DeviceDesc::swapchain_color_space` defaults to `ColorSpace::srgb`. Windowed devices enable
 `VK_EXT_swapchain_colorspace` when advertised, including devices starting in SDR. Extended output

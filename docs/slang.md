@@ -50,7 +50,8 @@ additional pointers inside the root can be selected by GPU work.
 
 | Target | Root | Texture namespace | Sampler namespace |
 | --- | --- | --- | --- |
-| Vulkan | Uniform buffer at binding 0, mapped to the 64-bit address in push data | Native resource descriptor heap | Native sampler descriptor heap |
+| Vulkan descriptor heap | Uniform buffer at binding 0, mapped to the 64-bit address in push data | Native resource descriptor heap | Native sampler descriptor heap |
+| Vulkan descriptor buffer | Typed GPU pointer in eight bytes of push constants, loaded with the declared root alignment | Sampled/storage arrays at sets 1/2, binding 0 | Sampler array at set 3, binding 0 |
 | Metal | `ConstantBuffer<T>` at buffer 0 in the `constant` address space | 64-bit texture-pool base at buffer 1 | Typed sampler entries at buffer 2 |
 
 Metal 4 selects textures using `baseResourceID + index`.
@@ -99,35 +100,61 @@ This applies to default and explicit viewports; shaders need no Y-flip helper or
 
 ## Build and stage artifacts
 
-Vulkan requires Slang 2026.14.1+ and SPIRV-Tools 2026.3+. Metal requires stock Slang 2026.18.2+ and
-Xcode 26+; compile Metal 4.0 metallibs for macOS or iOS 26+.
-No Slang fork or generated-source rewriting is required.
-Both targets use `-matrix-layout-row-major`; Vulkan additionally requires `-fvk-use-c-layout`.
+Use `NoGraphicsAPI_compile_slang` with either `add_subdirectory(NoGraphicsAPI)` or the installed
+`find_package(NoGraphicsAPI CONFIG REQUIRED)` package. It is available without enabling examples or tests.
 
-```sh
-slangc shader.slang -target spirv -profile spirv_1_5 -emit-spirv-directly \
-  -fvk-use-entrypoint-name -fvk-use-c-layout -matrix-layout-row-major \
-  -capability spvDescriptorHeapEXT -entry computeMain -stage compute -o shader.comp.spv
-spirv-val --target-env vulkan1.4 --scalar-block-layout shader.comp.spv
-
-slangc shader.slang -target metal -DNOGRAPHICSAPI_METAL -matrix-layout-row-major \
-  -entry computeMain -stage compute -o shader.comp.metal
-xcrun -sdk macosx metal -std=metal4.0 -target air64-apple-macos26.0 -c shader.comp.metal -o shader.comp.air
-xcrun -sdk macosx metallib shader.comp.air -o shader.comp.metallib
+```cmake
+find_package(NoGraphicsAPI CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE NoGraphicsAPI::NoGraphicsAPI)
+set(program "${CMAKE_CURRENT_BINARY_DIR}/shader.comp.${NOGRAPHICSAPI_SHADER_EXTENSION}")
+NoGraphicsAPI_compile_slang("${program}" shader.slang computeMain compute)
+target_sources(my_app PRIVATE "${program}")
 ```
 
-For iOS 26+ device libraries, use `-sdk iphoneos` in both Xcode commands and replace the target with
-`-target air64-apple-ios26.0`. Shared sources and shader metadata stay the same;
-the resulting metallib is specific to its target platform.
+The helper tracks included files and accepts `INCLUDE_DIRECTORIES`, `DEFINES`, `OPTIONS` (additional Slang flags),
+and `DEPENDS` (for generated inputs). Build the application normally; shader variants need no separate targets.
+Stage the resulting artifact with the application's other assets.
+When independent executables share an artifact, give it one `add_custom_target(shaders DEPENDS "${program}")`
+and make each executable depend on that target with `add_dependencies`; this prevents concurrent writes in parallel MSBuild builds.
 
-Task and mesh Vulkan stages also require `spvMeshShadingEXT`. Entry names are preserved on both
-targets. Assign whole vertex structs to mesh outputs; Metal does not accept field-wise output writes.
+Vulkan produces one `.shader` package containing native descriptor-heap and descriptor-buffer SPIR-V.
+Both are compiled offline from the same source and validated. This still performs two internal compilations;
+it preserves native shader performance without application-side variants, GPU detection, or shader changes.
+PSO creation selects a borrowed span from the package, without allocation, compilation, or translation.
 
-`ShaderStage` carries bytes, an entry name, and compiled threadgroup size. Apple devices accept
-precompiled metallib; Vulkan accepts SPIR-V. Debug builds assert the expected artifact header.
-On Metal, compute, task and mesh `threadgroup_size` must match `numthreads`; use the same shared
-constant at shader and PSO call sites. Vulkan reads the dimensions from SPIR-V. Shader compilation
-belongs to the build system; the API performs no runtime SPIR-V translation. The library has no built-in shader programs; `shader.slang` supplies helpers for application shaders.
+Load the artifact using ordinary file or asset I/O and pass its bytes in `ShaderStage::code`:
+
+```cpp
+gpu::PSO* pso = gpu::create_compute_pso(device, {.code = shader_bytes, .entry_point = "computeMain"});
+```
+
+Vulkan package storage must be four-byte aligned. Raw native-heap SPIR-V remains accepted on native-heap
+devices; use the package for portable deployment. No application descriptor-set or pipeline-layout declarations
+are needed. The descriptor-buffer backend uses private layouts without descriptor-set allocation, updates, or binds.
+
+For build systems other than CMake, the same compiler is available as a command or Python function:
+
+```sh
+python NoGraphicsAPI/tools/compile_shader.py shader.slang -o shader.comp.shader \
+  --entry computeMain --stage compute -- \
+  -INoGraphicsAPI/include -INoGraphicsAPI/utility/include
+```
+
+Use `--slang`, `--spirv-val`, `--debug-level`, and `--depfile` as needed. Optional `--opt-config` and
+`--spirv-opt` apply additional SPIRV-Tools passes to both variants. Failed compilation or validation preserves
+the previous package. The installed script is beside `NoGraphicsAPIConfig.cmake`; installed headers share one
+include directory. Vulkan requires Python 3.9+, Slang 2026.14.1+, and SPIRV-Tools 2026.3+ at shader build time.
+Linking the library or loading precompiled packages needs none of these compiler tools.
+
+On Apple platforms the CMake helper produces a `.metallib` using stock Slang 2026.18.2+ and Xcode 26+.
+Compile Metal 4.0 libraries for macOS or iOS 26+; each metallib is specific to its target platform.
+On Metal, compute, task, and mesh `threadgroup_size` must match `numthreads`; use the same shared constant
+at shader and PSO call sites. Vulkan reads those dimensions from SPIR-V.
+
+Both targets use row-major matrices; Vulkan additionally uses C-compatible layout. Entry names are preserved,
+and the helper enables the Vulkan mesh capability for task and mesh stages. Assign whole vertex structs to
+mesh outputs; Metal does not accept field-wise output writes. The library has no built-in shader programs;
+`shader.slang` supplies helpers for application shaders.
 
 ## References
 

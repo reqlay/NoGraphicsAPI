@@ -1,4 +1,5 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
+#include "shader_package.hpp"
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -42,10 +43,16 @@ constexpr uint32 max_queue_families = 64;
 constexpr uint32 queue_type_count = 3; // General, compute-only, copy-only.
 constexpr uint32 max_color_attachments = 8;
 constexpr uint32 max_swapchain_images = 8;
+#if defined(NOGRAPHICSAPI_TEST_IMMEDIATE_PRESENT)
+constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+#else
 constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+#endif
 constexpr uint32 gpu_allocation_alignment = 16;
 constexpr uint32 max_surface_formats = 64;
 constexpr uint32 format_count = static_cast<uint32>(Format::undefined);
+constexpr VkShaderStageFlags descriptor_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TASK_BIT_EXT |
+    VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
 enum class DescriptorHeapType : uint8
 {
@@ -442,7 +449,7 @@ static_assert(to_vk(Stage::task) == VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT);
 static_assert(to_vk(Stage::all_commands | Stage::host) ==
               (VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_2_HOST_BIT));
 
-VkAccessFlags2 to_vk(Access accesses)
+VkAccessFlags2 to_vk(Access accesses, bool descriptor_heap)
 {
     VkAccessFlags2 result = 0;
     if (has_flag(accesses, Access::transfer_read)) result |= VK_ACCESS_2_TRANSFER_READ_BIT;
@@ -457,7 +464,8 @@ VkAccessFlags2 to_vk(Access accesses)
     if (has_flag(accesses, Access::indirect_read)) result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     if (has_flag(accesses, Access::index_read)) result |= VK_ACCESS_2_INDEX_READ_BIT;
     if (has_flag(accesses, Access::host_read)) result |= VK_ACCESS_2_HOST_READ_BIT;
-    if (has_flag(accesses, Access::descriptor_read)) result |= VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT | VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT;
+    if (has_flag(accesses, Access::descriptor_read)) result |= descriptor_heap
+        ? VK_ACCESS_2_SAMPLER_HEAP_READ_BIT_EXT | VK_ACCESS_2_RESOURCE_HEAP_READ_BIT_EXT : VK_ACCESS_2_DESCRIPTOR_BUFFER_READ_BIT_EXT;
     return result;
 }
 
@@ -494,6 +502,10 @@ namespace detail
 
 struct DeviceFunctions
 {
+    PFN_vkGetDescriptorEXT get_descriptor = nullptr;
+    PFN_vkGetDescriptorSetLayoutBindingOffsetEXT get_descriptor_offset = nullptr;
+    PFN_vkCmdBindDescriptorBuffersEXT cmd_bind_descriptor_buffers = nullptr;
+    PFN_vkCmdSetDescriptorBufferOffsetsEXT cmd_set_descriptor_offsets = nullptr;
     PFN_vkWriteSamplerDescriptorsEXT write_sampler_descriptors = nullptr;
     PFN_vkWriteResourceDescriptorsEXT write_resource_descriptors = nullptr;
     PFN_vkCmdBindSamplerHeapEXT cmd_bind_sampler_heap = nullptr;
@@ -598,12 +610,21 @@ struct GpuHeapOwner
     detail::BufferRecord* record = nullptr;
 };
 
+struct DescriptorObject
+{
+    VkImageView view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    uint32 references = 1;
+};
+
 struct TextureDescriptorHeap
 {
     Device* state = nullptr;
     GpuHeap storage = {};
     byte* descriptors = nullptr;
     uint32 capacity = 0;
+    DescriptorObject** objects = nullptr;
+    VkDeviceSize storage_offset = 0;
 };
 
 struct SamplerDescriptorHeap
@@ -612,6 +633,7 @@ struct SamplerDescriptorHeap
     GpuHeap storage = {};
     byte* descriptors = nullptr;
     uint32 capacity = 0;
+    DescriptorObject** objects = nullptr;
 };
 
 struct TextureHeapOwner
@@ -640,6 +662,9 @@ struct CommandBuffer
     Swapchain* swapchain = nullptr;
     bool submitted = false;
     bool has_epilogue = false;
+    TextureDescriptorHeap* texture_descriptors = nullptr;
+    SamplerDescriptorHeap* sampler_descriptors = nullptr;
+    VkQueueFlags queue_flags = 0;
 };
 
 struct CommandPool
@@ -650,6 +675,7 @@ struct CommandPool
     CommandBuffer* last = nullptr;
     CommandBuffer* next_buffer = nullptr;
     bool timestamps = false;
+    VkQueueFlags queue_flags = 0;
 };
 
 namespace detail
@@ -660,6 +686,7 @@ struct Queue
     VkQueue queue = VK_NULL_HANDLE;
     uint32 family_index = 0;
     bool timestamps = false;
+    VkQueueFlags flags = 0;
     VkCommandBufferSubmitInfo* command_submit_infos = nullptr;
     size_t command_submit_capacity = 0;
     VkSemaphoreSubmitInfo* wait_submit_infos = nullptr;
@@ -693,6 +720,13 @@ struct Device
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkPhysicalDeviceProperties physical_properties{};
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
+    VkDescriptorSetLayout descriptor_layouts[4]{};
+    VkDeviceSize descriptor_offsets[3]{};
+    uint32 descriptor_counts[3]{};
+    VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+    bool descriptor_heap = false;
+    bool swapchain_maintenance = false;
     uint64 max_timeline_value_difference = 0;
     uint64 texture_heap_alignment = 16;
     uint32 texture_memory_type = VK_MAX_MEMORY_TYPES;
@@ -887,8 +921,17 @@ bool supports_gpu_heap_memory(Device& device) noexcept
     {
         return false;
     }
-    const VkMemoryRequirements descriptor = buffer_memory_requirements(device, universal_buffer_usage | VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT);
-    return device.find_memory_type(descriptor.memoryTypeBits, cpu_visible_memory_properties, 0, descriptor.size, memory_type);
+    if (device.descriptor_heap)
+    {
+        const VkMemoryRequirements descriptor = buffer_memory_requirements(device, universal_buffer_usage | VK_BUFFER_USAGE_DESCRIPTOR_HEAP_BIT_EXT);
+        return device.find_memory_type(descriptor.memoryTypeBits, cpu_visible_memory_properties, 0, descriptor.size, memory_type);
+    }
+    for (VkBufferUsageFlags usage : {VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT, VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT})
+    {
+        const VkMemoryRequirements descriptor = buffer_memory_requirements(device, VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | usage);
+        if (!device.find_memory_type(descriptor.memoryTypeBits, cpu_visible_memory_properties, 0, descriptor.size, memory_type)) return false;
+    }
+    return true;
 }
 
 bool fits_image_format_properties(const VkImageCreateInfo& image_info, const VkImageFormatProperties& properties) noexcept
@@ -1079,6 +1122,9 @@ Device::~Device()
     {
         destroy_present_context(present_contexts[index]);
     }
+    if (device && pipeline_layout) vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+    for (VkDescriptorSetLayout layout : descriptor_layouts)
+        if (device && layout) vkDestroyDescriptorSetLayout(device, layout, nullptr);
     if (device) vkDestroyDevice(device, nullptr);
     if (instance && surface) vkDestroySurfaceKHR(instance, surface, nullptr);
     if (instance && debug_messenger && destroy_debug_messenger) destroy_debug_messenger(instance, debug_messenger, nullptr);
@@ -1288,6 +1334,21 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
 
 GpuHeap Device::allocate_descriptor_heap(VkDeviceSize size, DescriptorHeapType type) noexcept
 {
+    if (!descriptor_heap)
+    {
+        GpuHeapOwner* heap = new GpuHeapOwner{.state = this};
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | (type == DescriptorHeapType::texture
+            ? VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT : VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT);
+        const VkDeviceSize alignment = descriptor_properties.descriptorBufferOffsetAlignment;
+        if (!create_backing_buffer(heap->backing, size + alignment - 1, usage, cpu_visible_memory_properties, 0))
+        {
+            delete heap;
+            return {};
+        }
+        const VkDeviceAddress address = align_up(heap->backing.address, alignment);
+        return {.range = {.cpu = static_cast<byte*>(heap->backing.mapped) + address - heap->backing.address,
+                          .gpu = reinterpret_cast<byte*>(static_cast<uintptr>(address)), .size = size}, .owner = heap};
+    }
     const VkDeviceSize resource_alignment = heap_properties.imageDescriptorAlignment > heap_properties.bufferDescriptorAlignment
                                                 ? heap_properties.imageDescriptorAlignment
                                                 : heap_properties.bufferDescriptorAlignment;
@@ -1352,6 +1413,7 @@ struct Swapchain
     Device* state = nullptr;
     VkSwapchainKHR handle = VK_NULL_HANDLE;
     VkImage images[max_swapchain_images]{};
+    VkSemaphore rendered[max_swapchain_images]{};
     RenderView render_views[max_swapchain_images]{};
     bool initialized[max_swapchain_images]{};
     uint32 image_count = 0;
@@ -1398,21 +1460,21 @@ void record_image_barriers(VkCommandBuffer command_buffer, Span<const VkImageMem
     vkCmdPipelineBarrier2(command_buffer, &dependency);
 }
 
-void record_barrier(VkCommandBuffer command_buffer, Stage before, Access before_access, Stage after, Access after_access) noexcept
+void record_barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept
 {
     const VkMemoryBarrier2 memory_barrier{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
         .srcStageMask = to_vk(before),
-        .srcAccessMask = to_vk(before_access),
+        .srcAccessMask = to_vk(before_access, commands->state->descriptor_heap),
         .dstStageMask = to_vk(after),
-        .dstAccessMask = to_vk(after_access),
+        .dstAccessMask = to_vk(after_access, commands->state->descriptor_heap),
     };
     const VkDependencyInfo dependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
         .memoryBarrierCount = 1,
         .pMemoryBarriers = &memory_barrier,
     };
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vkCmdPipelineBarrier2(commands->command_buffer, &dependency);
 }
 
 void make_heap_bind_info(GpuRange heap, VkDeviceSize reserved_alignment, VkDeviceSize reserved_size, VkBindHeapInfoEXT& output) noexcept
@@ -1460,23 +1522,31 @@ struct QueriedFeatures
     VkPhysicalDeviceVulkan13Features vulkan13{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     VkPhysicalDeviceVulkan14Features vulkan14{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES};
     VkPhysicalDeviceDescriptorHeapFeaturesEXT descriptor_heap{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT};
+    VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
     VkPhysicalDeviceDeviceAddressCommandsFeaturesKHR address_commands{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_ADDRESS_COMMANDS_FEATURES_KHR};
     VkPhysicalDeviceShaderUntypedPointersFeaturesKHR untyped_pointers{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR};
     VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified_image_layouts{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
     VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR swapchain_maintenance1{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR};
 
-    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts, bool include_address_commands)
+    explicit QueriedFeatures(bool presentation, bool include_unified_image_layouts, bool include_address_commands, bool native_heap)
     {
         core.pNext = &vulkan11;
         vulkan11.pNext = &vulkan12;
         vulkan12.pNext = &vulkan13;
         vulkan13.pNext = &vulkan14;
-        vulkan14.pNext = &descriptor_heap;
-        descriptor_heap.pNext = include_address_commands ? static_cast<void*>(&address_commands) : static_cast<void*>(&untyped_pointers);
-        address_commands.pNext = &untyped_pointers;
-        untyped_pointers.pNext = include_unified_image_layouts ? static_cast<void*>(&unified_image_layouts) : static_cast<void*>(&mesh_shader);
+        vulkan14.pNext = native_heap ? static_cast<void*>(&descriptor_heap) : static_cast<void*>(&descriptor_buffer);
+        descriptor_heap.pNext = &untyped_pointers;
+        untyped_pointers.pNext = &descriptor_buffer;
+        descriptor_buffer.pNext = include_address_commands ? static_cast<void*>(&address_commands) : static_cast<void*>(&unified_image_layouts);
+        address_commands.pNext = &unified_image_layouts;
         unified_image_layouts.pNext = &mesh_shader;
+        if (!include_unified_image_layouts)
+        {
+            descriptor_buffer.pNext = include_address_commands ? static_cast<void*>(&address_commands) : static_cast<void*>(&mesh_shader);
+            address_commands.pNext = &mesh_shader;
+        }
+        if (native_heap) untyped_pointers.pNext = descriptor_buffer.pNext;
         mesh_shader.pNext = presentation ? &swapchain_maintenance1 : nullptr;
     }
 };
@@ -1486,6 +1556,7 @@ struct Candidate
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     uint32 queue_families[queue_type_count]{};
     uint32 queue_counts[queue_type_count]{};
+    VkQueueFlags queue_flags[queue_type_count]{};
     bool timestamps[queue_type_count]{};
     uint32x3 copy_texture_granularity = {.x = 1, .y = 1, .z = 1};
     VkPhysicalDeviceProperties properties{};
@@ -1498,7 +1569,10 @@ struct Candidate
     bool texture_compression_etc2 = false;
     bool storage_input_output16 = false;
     bool khr_swapchain_maintenance1 = false;
+    bool swapchain_maintenance = false;
+    bool descriptor_heap = false;
     VkPhysicalDeviceDescriptorHeapPropertiesEXT heap_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
+    VkPhysicalDeviceDescriptorBufferPropertiesEXT descriptor_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
     VkPhysicalDeviceVulkan12Properties vulkan12_properties{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
     const char* missing_extensions[5]{};
     uint32 missing_extension_count = 0;
@@ -1528,13 +1602,22 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     const bool unified_image_layouts_extension = has_name(
         {extensions, extension_count},
         VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
+    const bool heap_extension = has_name({extensions, extension_count}, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME);
+    const bool untyped_extension = has_name({extensions, extension_count}, VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME);
+    bool native_heap = heap_extension && untyped_extension;
+#if defined(NOGRAPHICSAPI_TEST_DESCRIPTOR_BUFFER)
+    native_heap = false;
+#endif
+    if (!native_heap && !has_name({extensions, extension_count}, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME))
+        output.missing_extensions[output.missing_extension_count++] = heap_extension
+            ? (untyped_extension ? "VK_EXT_descriptor_buffer" : "VK_KHR_shader_untyped_pointers or VK_EXT_descriptor_buffer")
+            : (untyped_extension ? "VK_EXT_descriptor_heap or VK_EXT_descriptor_buffer"
+                                 : "VK_EXT_descriptor_heap + VK_KHR_shader_untyped_pointers, or VK_EXT_descriptor_buffer");
     constexpr const char* required_extensions[]{
-        VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME,
-        VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME,
         VK_EXT_MESH_SHADER_EXTENSION_NAME,
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
-    for (uint32 index = 0; index < (surface ? 4u : 3u); ++index)
+    for (uint32 index = 0; index < (surface ? 2u : 1u); ++index)
     {
         if (!has_name({extensions, extension_count}, required_extensions[index]))
             output.missing_extensions[output.missing_extension_count++] = required_extensions[index];
@@ -1543,25 +1626,21 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
                                             has_name({extensions, extension_count}, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
     const bool ext_swapchain_maintenance1 = ext_surface_maintenance1 &&
                                             has_name({extensions, extension_count}, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
-    if (surface && !khr_swapchain_maintenance1 && !ext_swapchain_maintenance1)
-    {
-        output.missing_extensions[output.missing_extension_count++] = khr_surface_maintenance1 && ext_surface_maintenance1
-            ? "VK_KHR_swapchain_maintenance1 or VK_EXT_swapchain_maintenance1"
-            : khr_surface_maintenance1 ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
-    }
     if (output.missing_extension_count) return Error::unsupported;
 
     Candidate result{
         .physical_device = physical_device,
     };
     result.heap_properties.pNext = &result.vulkan12_properties;
+    result.descriptor_properties.pNext = &result.vulkan12_properties;
     VkPhysicalDeviceProperties2 properties2{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-        .pNext = &result.heap_properties,
+        .pNext = native_heap ? static_cast<void*>(&result.heap_properties) : static_cast<void*>(&result.descriptor_properties),
     };
     vkGetPhysicalDeviceProperties2(physical_device, &properties2);
     result.properties = properties2.properties;
     result.heap_properties.pNext = nullptr;
+    result.descriptor_properties.pNext = nullptr;
     result.vulkan12_properties.pNext = nullptr;
     if (result.properties.apiVersion < VK_API_VERSION_1_4)
         return Error::unsupported;
@@ -1580,7 +1659,8 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     if (!cpu_visible_memory) return Error::unsupported;
 
     const bool address_commands_extension = has_name({extensions, extension_count}, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME);
-    QueriedFeatures features(surface != VK_NULL_HANDLE, unified_image_layouts_extension, address_commands_extension);
+    QueriedFeatures features(surface && (khr_swapchain_maintenance1 || ext_swapchain_maintenance1),
+                             unified_image_layouts_extension, address_commands_extension, native_heap);
     vkGetPhysicalDeviceFeatures2(physical_device, &features.core);
     const bool required_features =
         features.core.features.shaderInt16 == VK_TRUE &&
@@ -1604,12 +1684,14 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         features.vulkan13.dynamicRendering == VK_TRUE &&
         features.vulkan13.maintenance4 == VK_TRUE &&
         features.vulkan14.maintenance5 == VK_TRUE &&
-        features.descriptor_heap.descriptorHeap == VK_TRUE &&
-        features.untyped_pointers.shaderUntypedPointers == VK_TRUE &&
+        (native_heap ? (features.descriptor_heap.descriptorHeap == VK_TRUE && features.untyped_pointers.shaderUntypedPointers == VK_TRUE)
+                     : (features.descriptor_buffer.descriptorBuffer == VK_TRUE && features.vulkan12.descriptorBindingVariableDescriptorCount == VK_TRUE &&
+                        features.vulkan12.runtimeDescriptorArray == VK_TRUE && features.vulkan12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
+                        features.vulkan12.shaderStorageImageArrayNonUniformIndexing == VK_TRUE)) &&
         features.mesh_shader.meshShader == VK_TRUE &&
+        features.mesh_shader.taskShader == VK_TRUE &&
         (features.core.features.textureCompressionBC == VK_TRUE ||
-         features.core.features.textureCompressionASTC_LDR == VK_TRUE) &&
-        (!surface || features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE);
+         features.core.features.textureCompressionASTC_LDR == VK_TRUE);
     if (!required_features)
         return Error::unsupported;
     result.unified_image_layouts = unified_image_layouts_extension && features.unified_image_layouts.unifiedImageLayouts == VK_TRUE;
@@ -1622,6 +1704,11 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
     result.storage_input_output16 = features.vulkan11.storageInputOutput16 == VK_TRUE;
     result.khr_swapchain_maintenance1 = khr_swapchain_maintenance1;
+    result.swapchain_maintenance = surface && features.swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE;
+#if defined(NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION)
+    result.swapchain_maintenance = false;
+#endif
+    result.descriptor_heap = native_heap;
 
     uint32 available_queue_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical_device, &available_queue_count, nullptr);
@@ -1666,6 +1753,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
         {
             result.queue_families[type] = index;
             result.queue_counts[type] = queues[index].queueCount;
+            result.queue_flags[type] = queues[index].queueFlags;
             result.timestamps[type] = desc.timestamp_query_count != 0 && queues[index].timestampValidBits == 64 && features.vulkan12.hostQueryReset;
             if (type == 2)
             {
@@ -1683,6 +1771,72 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
 
     output = result;
     return Error::none;
+}
+
+Error create_descriptor_bindings(Device& device) noexcept
+{
+    if (device.descriptor_heap) return Error::none;
+
+    const VkPhysicalDeviceLimits& limits = device.physical_properties.limits;
+    const VkPhysicalDeviceDescriptorBufferPropertiesEXT& properties = device.descriptor_properties;
+    if (properties.maxDescriptorBufferBindings < 2 || !properties.maxResourceDescriptorBufferBindings ||
+        !properties.maxSamplerDescriptorBufferBindings || limits.maxBoundDescriptorSets < 4) return Error::unsupported;
+    constexpr VkDescriptorType types[]{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER};
+    const uint32 set_limits[]{limits.maxDescriptorSetSampledImages, limits.maxDescriptorSetStorageImages, limits.maxDescriptorSetSamplers};
+    const uint32 stage_limits[]{limits.maxPerStageDescriptorSampledImages, limits.maxPerStageDescriptorStorageImages, limits.maxPerStageDescriptorSamplers};
+    const VkDescriptorBindingFlags binding_flags = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo flags_info{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindingFlags = &binding_flags,
+    };
+    VkDescriptorSetLayoutCreateInfo layout_info{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+    };
+    Error error = error_from_vk(vkCreateDescriptorSetLayout(device.device, &layout_info, nullptr, &device.descriptor_layouts[0]),
+                                "vkCreateDescriptorSetLayout (empty)");
+    if (error != Error::none) return error;
+    // Each image namespace gets half the remaining per-stage resource budget.
+    uint32 sampler_limit = set_limits[2] < stage_limits[2] ? set_limits[2] : stage_limits[2];
+    if (sampler_limit > limits.maxPerStageResources / 3) sampler_limit = limits.maxPerStageResources / 3;
+    const uint32 image_limit = limits.maxPerStageResources > sampler_limit ? (limits.maxPerStageResources - sampler_limit) / 2 : 0;
+    for (uint32 index = 0; index < 3; ++index)
+    {
+        uint32 count = set_limits[index] < stage_limits[index] ? set_limits[index] : stage_limits[index];
+        const uint32 budget = index == 2 ? sampler_limit : image_limit;
+        if (count > budget) count = budget;
+        if (!count) return Error::unsupported;
+        VkDescriptorSetLayoutBinding binding{.binding = 0, .descriptorType = types[index], .descriptorCount = 1, .stageFlags = descriptor_stages};
+        layout_info.pNext = &flags_info;
+        layout_info.bindingCount = 1;
+        layout_info.pBindings = &binding;
+        VkDescriptorSetVariableDescriptorCountLayoutSupport variable_support{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT,
+        };
+        VkDescriptorSetLayoutSupport support{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT, .pNext = &variable_support};
+        vkGetDescriptorSetLayoutSupport(device.device, &layout_info, &support);
+        if (!support.supported || !variable_support.maxVariableDescriptorCount) return Error::unsupported;
+        binding.descriptorCount = count < variable_support.maxVariableDescriptorCount ? count : variable_support.maxVariableDescriptorCount;
+        vkGetDescriptorSetLayoutSupport(device.device, &layout_info, &support);
+        if (!support.supported) return Error::unsupported;
+        error = error_from_vk(vkCreateDescriptorSetLayout(device.device, &layout_info, nullptr, &device.descriptor_layouts[index + 1]),
+                              "vkCreateDescriptorSetLayout (descriptor buffer)");
+        if (error != Error::none) return error;
+        device.descriptor_counts[index] = binding.descriptorCount;
+        device.fn.get_descriptor_offset(device.device, device.descriptor_layouts[index + 1], 0, &device.descriptor_offsets[index]);
+    }
+    const VkPushConstantRange push_range{.stageFlags = descriptor_stages, .size = sizeof(void*)};
+    const VkPipelineLayoutCreateInfo pipeline_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 4,
+        .pSetLayouts = device.descriptor_layouts,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_range,
+    };
+    device.heap_properties.imageDescriptorSize = uint32(properties.sampledImageDescriptorSize + properties.storageImageDescriptorSize);
+    device.heap_properties.samplerDescriptorSize = uint32(properties.samplerDescriptorSize);
+    return error_from_vk(vkCreatePipelineLayout(device.device, &pipeline_info, nullptr, &device.pipeline_layout), "vkCreatePipelineLayout");
 }
 
 Error enumerate_physical_devices(VkInstance instance, Span<VkPhysicalDevice> values, uint32& count) noexcept
@@ -1743,12 +1897,17 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
 #if defined(_WIN32)
     state->swapchain_color_space_enabled = presentation &&
         has_name({instance_extensions, instance_extension_count}, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+#if defined(NOGRAPHICSAPI_TEST_LEGACY_PRESENTATION)
+    constexpr bool khr_surface_maintenance1 = false;
+    constexpr bool ext_surface_maintenance1 = false;
+#else
     const bool khr_surface_maintenance1 = presentation && has_name(
         {instance_extensions, instance_extension_count},
         VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     const bool ext_surface_maintenance1 = presentation && has_name(
         {instance_extensions, instance_extension_count},
         VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+#endif
     if (presentation)
     {
         const char* missing_extensions[5]{};
@@ -1763,8 +1922,6 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             if (!has_name({instance_extensions, instance_extension_count}, name))
                 missing_extensions[missing_extension_count++] = name;
         }
-        if (!khr_surface_maintenance1 && !ext_surface_maintenance1)
-            missing_extensions[missing_extension_count++] = "VK_KHR_surface_maintenance1 or VK_EXT_surface_maintenance1";
         if (desc.swapchain_color_space != ColorSpace::srgb && !state->swapchain_color_space_enabled)
             missing_extensions[missing_extension_count++] = VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME;
         if (missing_extension_count)
@@ -1907,6 +2064,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     state->physical_device = selected.physical_device;
     state->physical_properties = selected.properties;
     state->heap_properties = selected.heap_properties;
+    state->descriptor_properties = selected.descriptor_properties;
+    state->descriptor_heap = selected.descriptor_heap;
+    state->swapchain_maintenance = selected.swapchain_maintenance;
     state->max_timeline_value_difference = selected.vulkan12_properties.maxTimelineSemaphoreValueDifference;
     state->heap_properties.pNext = nullptr;
     state->memory_properties = selected.memory_properties;
@@ -1916,7 +2076,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             state->physical_device, static_cast<Format>(value));
     }
 
-    QueriedFeatures enabled_features(presentation, selected.unified_image_layouts, selected.address_commands);
+    QueriedFeatures enabled_features(state->swapchain_maintenance, selected.unified_image_layouts, selected.address_commands, state->descriptor_heap);
     state->texture_compression_etc2 = selected.texture_compression_etc2;
     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
@@ -1941,11 +2101,16 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.vulkan12.timelineSemaphore = VK_TRUE;
     enabled_features.vulkan12.hostQueryReset = selected.timestamps[0] || selected.timestamps[1] || selected.timestamps[2];
     enabled_features.vulkan12.bufferDeviceAddress = VK_TRUE;
+    enabled_features.vulkan12.runtimeDescriptorArray = !selected.descriptor_heap;
+    enabled_features.vulkan12.shaderSampledImageArrayNonUniformIndexing = !selected.descriptor_heap;
+    enabled_features.vulkan12.shaderStorageImageArrayNonUniformIndexing = !selected.descriptor_heap;
+    enabled_features.vulkan12.descriptorBindingVariableDescriptorCount = !state->descriptor_heap;
     enabled_features.vulkan13.synchronization2 = VK_TRUE;
     enabled_features.vulkan13.dynamicRendering = VK_TRUE;
     enabled_features.vulkan13.maintenance4 = VK_TRUE;
     enabled_features.vulkan14.maintenance5 = VK_TRUE;
     enabled_features.descriptor_heap.descriptorHeap = VK_TRUE;
+    enabled_features.descriptor_buffer.descriptorBuffer = VK_TRUE;
     enabled_features.address_commands.deviceAddressCommands = selected.address_commands;
     enabled_features.untyped_pointers.shaderUntypedPointers = VK_TRUE;
     enabled_features.unified_image_layouts.unifiedImageLayouts = selected.unified_image_layouts ? VK_TRUE : VK_FALSE;
@@ -1980,9 +2145,10 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     }
     const char* enabled_device_extensions[7]{};
     uint32 enabled_device_extension_count = 0;
-    enabled_device_extensions[enabled_device_extension_count++] = VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME;
+    enabled_device_extensions[enabled_device_extension_count++] = state->descriptor_heap
+        ? VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME : VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME;
     if (selected.address_commands) enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME;
-    enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME;
+    if (state->descriptor_heap) enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SHADER_UNTYPED_POINTERS_EXTENSION_NAME;
     if (selected.unified_image_layouts)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME;
@@ -1992,9 +2158,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     if (presentation)
     {
         enabled_device_extensions[enabled_device_extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-        enabled_device_extensions[enabled_device_extension_count++] = selected.khr_swapchain_maintenance1
-            ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME
-            : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+        if (state->swapchain_maintenance)
+            enabled_device_extensions[enabled_device_extension_count++] = selected.khr_swapchain_maintenance1
+                ? VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME : VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
     }
 #endif
     const VkDeviceCreateInfo device_info{
@@ -2017,24 +2183,41 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             detail::Queue& queue = state->queues[first_queue++];
             queue.family_index = selected.queue_families[type];
             queue.timestamps = selected.timestamps[type];
+            queue.flags = selected.queue_flags[type];
             vkGetDeviceQueue(state->device, queue.family_index, index, &queue.queue);
         }
     }
     if (!supports_gpu_heap_memory(*state) || !select_texture_memory_type(*state))
         return fail_device_creation(state, Error::unsupported);
 
-    state->fn.write_sampler_descriptors = load_device_proc<PFN_vkWriteSamplerDescriptorsEXT>(state->device, "vkWriteSamplerDescriptorsEXT");
-    state->fn.write_resource_descriptors = load_device_proc<PFN_vkWriteResourceDescriptorsEXT>(state->device, "vkWriteResourceDescriptorsEXT");
-    state->fn.cmd_bind_sampler_heap = load_device_proc<PFN_vkCmdBindSamplerHeapEXT>(state->device, "vkCmdBindSamplerHeapEXT");
-    state->fn.cmd_bind_texture_heap = load_device_proc<PFN_vkCmdBindResourceHeapEXT>(state->device, "vkCmdBindResourceHeapEXT");
-    state->fn.cmd_push_data = load_device_proc<PFN_vkCmdPushDataEXT>(state->device, "vkCmdPushDataEXT");
-    state->fn.cmd_draw_mesh_tasks = load_device_proc<PFN_vkCmdDrawMeshTasksEXT>(state->device, "vkCmdDrawMeshTasksEXT");
-    if (!state->fn.write_sampler_descriptors || !state->fn.write_resource_descriptors ||
-        !state->fn.cmd_bind_sampler_heap || !state->fn.cmd_bind_texture_heap ||
-        !state->fn.cmd_push_data || !state->fn.cmd_draw_mesh_tasks)
+    if (state->descriptor_heap)
     {
-        return fail_device_creation(state, Error::driver_error, "The graphics driver did not provide the required Vulkan command entry points.");
+        state->fn.write_sampler_descriptors = load_device_proc<PFN_vkWriteSamplerDescriptorsEXT>(state->device, "vkWriteSamplerDescriptorsEXT");
+        state->fn.write_resource_descriptors = load_device_proc<PFN_vkWriteResourceDescriptorsEXT>(state->device, "vkWriteResourceDescriptorsEXT");
+        state->fn.cmd_bind_sampler_heap = load_device_proc<PFN_vkCmdBindSamplerHeapEXT>(state->device, "vkCmdBindSamplerHeapEXT");
+        state->fn.cmd_bind_texture_heap = load_device_proc<PFN_vkCmdBindResourceHeapEXT>(state->device, "vkCmdBindResourceHeapEXT");
+        state->fn.cmd_push_data = load_device_proc<PFN_vkCmdPushDataEXT>(state->device, "vkCmdPushDataEXT");
+        if (!state->fn.write_sampler_descriptors || !state->fn.write_resource_descriptors ||
+            !state->fn.cmd_bind_sampler_heap || !state->fn.cmd_bind_texture_heap ||
+            !state->fn.cmd_push_data)
+        {
+            return fail_device_creation(state, Error::driver_error, "The graphics driver did not provide the required Vulkan command entry points.");
+        }
     }
+    else
+    {
+        state->fn.get_descriptor = load_device_proc<PFN_vkGetDescriptorEXT>(state->device, "vkGetDescriptorEXT");
+        state->fn.get_descriptor_offset = load_device_proc<PFN_vkGetDescriptorSetLayoutBindingOffsetEXT>(state->device, "vkGetDescriptorSetLayoutBindingOffsetEXT");
+        state->fn.cmd_bind_descriptor_buffers = load_device_proc<PFN_vkCmdBindDescriptorBuffersEXT>(state->device, "vkCmdBindDescriptorBuffersEXT");
+        state->fn.cmd_set_descriptor_offsets = load_device_proc<PFN_vkCmdSetDescriptorBufferOffsetsEXT>(state->device, "vkCmdSetDescriptorBufferOffsetsEXT");
+        if (!state->fn.get_descriptor || !state->fn.get_descriptor_offset ||
+            !state->fn.cmd_bind_descriptor_buffers || !state->fn.cmd_set_descriptor_offsets)
+            return fail_device_creation(state, Error::driver_error, "The graphics driver did not provide the Vulkan descriptor buffer commands.");
+    }
+    state->fn.cmd_draw_mesh_tasks = load_device_proc<PFN_vkCmdDrawMeshTasksEXT>(state->device, "vkCmdDrawMeshTasksEXT");
+    if (!state->fn.cmd_draw_mesh_tasks) return fail_device_creation(state, Error::driver_error, "The graphics driver did not provide vkCmdDrawMeshTasksEXT.");
+    error = create_descriptor_bindings(*state);
+    if (error != Error::none) return fail_device_creation(state, error);
     if (selected.address_commands)
     {
         state->fn.cmd_bind_index_buffer = load_device_proc<PFN_vkCmdBindIndexBuffer3KHR>(state->device, "vkCmdBindIndexBuffer3KHR");
@@ -2088,7 +2271,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .compute_queue_count = queue_counts[1],
         .copy_queue_count = queue_counts[2],
         .copy_texture_granularity = selected.copy_texture_granularity,
-        .max_push_data_size = state->heap_properties.maxPushDataSize,
+        .max_push_data_size = state->descriptor_heap ? state->heap_properties.maxPushDataSize : state->physical_properties.limits.maxPushConstantsSize,
         .texture_heap_alignment = state->texture_heap_alignment,
         .timestamp_period_ns = selected.properties.limits.timestampPeriod,
         .sub_texel_precision_bits = selected.properties.limits.subTexelPrecisionBits,
@@ -2216,6 +2399,25 @@ void retire_swapchain_handle(Swapchain& swapchain) noexcept
         return;
     }
 
+    if (!device->swapchain_maintenance)
+    {
+        // Core WSI has no present-completion fence. Restrict the conventional idle wait to retirement.
+        assert_vk(vkQueueWaitIdle(device->queues[0].queue));
+        device->drain_contexts();
+        for (uint32 index = 0; index < swapchain.image_count; ++index)
+        {
+            vkDestroyImageView(device->device, swapchain.render_views[index].view, nullptr);
+            vkDestroySemaphore(device->device, swapchain.rendered[index], nullptr);
+            swapchain.render_views[index] = {};
+            swapchain.rendered[index] = VK_NULL_HANDLE;
+            swapchain.images[index] = VK_NULL_HANDLE;
+            swapchain.initialized[index] = false;
+        }
+        vkDestroySwapchainKHR(device->device, swapchain.handle, nullptr);
+        swapchain.handle = VK_NULL_HANDLE;
+        swapchain.image_count = swapchain.width = swapchain.height = 0;
+        return;
+    }
     device->poll_present_contexts();
     detail::RetiredSwapchain retired{
         .handle = swapchain.handle,
@@ -2320,7 +2522,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     };
     const VkPhysicalDeviceSurfaceInfo2KHR surface_info{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
-        .pNext = &present_mode_info,
+        .pNext = device.swapchain_maintenance ? &present_mode_info : nullptr,
         .surface = device.surface,
     };
     VkSurfaceCapabilities2KHR capabilities_info{
@@ -2395,7 +2597,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     };
     const VkSwapchainCreateInfoKHR create_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .pNext = &present_modes_info,
+        .pNext = device.swapchain_maintenance ? &present_modes_info : nullptr,
         .surface = device.surface,
         .minImageCount = requested_image_count,
         .imageFormat = requested_format,
@@ -2464,6 +2666,23 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         }
     }
 
+    VkSemaphore rendered[max_swapchain_images]{};
+    if (!device.swapchain_maintenance)
+    {
+        const VkSemaphoreCreateInfo semaphore_info{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        for (uint32 index = 0; index < image_count; ++index)
+        {
+            result = vkCreateSemaphore(device.device, &semaphore_info, nullptr, &rendered[index]);
+            if (result != VK_SUCCESS)
+            {
+                for (uint32 created = 0; created < index; ++created) vkDestroySemaphore(device.device, rendered[created], nullptr);
+                for (uint32 image = 0; image < image_count; ++image) vkDestroyImageView(device.device, views[image], nullptr);
+                vkDestroySwapchainKHR(device.device, new_handle, nullptr);
+                retire_swapchain_handle(swapchain);
+                return error_from_vk(result, "vkCreateSemaphore (swapchain image)");
+            }
+        }
+    }
     retire_swapchain_handle(swapchain);
     swapchain.handle = new_handle;
     swapchain.image_count = image_count;
@@ -2475,6 +2694,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     for (uint32 index = 0; index < image_count; ++index)
     {
         swapchain.images[index] = images[index];
+        swapchain.rendered[index] = rendered[index];
         swapchain.render_views[index] = {
             .state = &device,
             .view = views[index],
@@ -2854,27 +3074,97 @@ void destroy_render_view(RenderView* render_view) noexcept
     delete render_view;
 }
 
+namespace
+{
+void release_descriptor_object(Device& device, DescriptorObject* object) noexcept
+{
+    if (!object) return;
+#if defined(_MSC_VER) && !defined(__clang__)
+    if (_InterlockedDecrement(reinterpret_cast<volatile long*>(&object->references))) return;
+#else
+    if (__atomic_sub_fetch(&object->references, 1, __ATOMIC_ACQ_REL)) return;
+#endif
+    if (object->view) vkDestroyImageView(device.device, object->view, nullptr);
+    if (object->sampler) vkDestroySampler(device.device, object->sampler, nullptr);
+    delete object;
+}
+
+void copy_descriptor_objects(Device& device, Span<DescriptorObject*> source, Span<DescriptorObject*> destination) noexcept
+{
+    for (size_t index = 0; index < source.size; ++index)
+    {
+        DescriptorObject* object = source.data[index];
+        if (!object) continue;
+#if defined(_MSC_VER) && !defined(__clang__)
+        _InterlockedIncrement(reinterpret_cast<volatile long*>(&object->references));
+#else
+        __atomic_add_fetch(&object->references, 1, __ATOMIC_RELAXED);
+#endif
+    }
+    for (size_t index = 0; index < destination.size; ++index) release_descriptor_object(device, destination.data[index]);
+    memmove(destination.data, source.data, source.size * sizeof(DescriptorObject*));
+}
+
+void upload_texture_descriptors(TextureDescriptorHeap& heap, uint32 index, uint32 count) noexcept
+{
+    const Device& device = *heap.state;
+    const uint64 stride = device.heap_properties.imageDescriptorSize;
+    if (device.descriptor_heap)
+    {
+        memcpy(heap.storage.range.cpu + uint64(index) * stride, heap.descriptors + uint64(index) * stride, size_t(count * stride));
+        return;
+    }
+    const uint64 sampled_size = device.descriptor_properties.sampledImageDescriptorSize;
+    const uint64 storage_size = device.descriptor_properties.storageImageDescriptorSize;
+    for (uint32 slot = index; slot < index + count; ++slot)
+    {
+        memcpy(heap.storage.range.cpu + device.descriptor_offsets[0] + slot * sampled_size, heap.descriptors + slot * stride, size_t(sampled_size));
+        memcpy(heap.storage.range.cpu + heap.storage_offset + device.descriptor_offsets[1] + slot * storage_size,
+               heap.descriptors + slot * stride + sampled_size, size_t(storage_size));
+    }
+}
+}
+
 TextureDescriptorHeap* create_texture_descriptor_heap(Device* device, uint32 capacity) noexcept
 {
     assert(device && capacity);
+    VkDeviceSize storage_offset = 0;
+    VkDeviceSize size = uint64(capacity) * device->heap_properties.imageDescriptorSize;
+    if (!device->descriptor_heap)
+    {
+        storage_offset = align_up(device->descriptor_offsets[0] + uint64(capacity) * device->descriptor_properties.sampledImageDescriptorSize,
+                                  device->descriptor_properties.descriptorBufferOffsetAlignment);
+        size = storage_offset + device->descriptor_offsets[1] + uint64(capacity) * device->descriptor_properties.storageImageDescriptorSize;
+        if (capacity > device->descriptor_counts[0] || capacity > device->descriptor_counts[1] ||
+            size > device->descriptor_properties.maxResourceDescriptorBufferRange)
+        {
+            if (error_callback) error_callback("Texture descriptor capacity exceeds the device's descriptor buffer limits.", false);
+            return nullptr;
+        }
+    }
     TextureDescriptorHeap* heap = new TextureDescriptorHeap{
         .state = device,
-        .storage = device->allocate_descriptor_heap(uint64(capacity) * device->heap_properties.imageDescriptorSize, DescriptorHeapType::texture),
+        .storage = device->allocate_descriptor_heap(size, DescriptorHeapType::texture),
         .capacity = capacity,
+        .storage_offset = storage_offset,
     };
     if (!heap->storage.owner)
     {
         delete heap;
         return nullptr;
     }
-    heap->descriptors = new byte[uint64(capacity) * device->heap_properties.imageDescriptorSize];
+    heap->descriptors = new byte[uint64(capacity) * device->heap_properties.imageDescriptorSize]{};
+    if (!device->descriptor_heap) heap->objects = new DescriptorObject*[capacity]{};
     return heap;
 }
 
 void destroy_texture_descriptor_heap(TextureDescriptorHeap* heap) noexcept
 {
     if (!heap) return;
+    if (heap->objects)
+        for (uint32 index = 0; index < heap->capacity; ++index) release_descriptor_object(*heap->state, heap->objects[index]);
     destroy_gpu_heap(heap->storage);
+    delete[] heap->objects;
     delete[] heap->descriptors;
     delete heap;
 }
@@ -2882,9 +3172,15 @@ void destroy_texture_descriptor_heap(TextureDescriptorHeap* heap) noexcept
 SamplerDescriptorHeap* create_sampler_descriptor_heap(Device* device, uint32 capacity) noexcept
 {
     assert(device && capacity);
+    const VkDeviceSize size = uint64(capacity) * device->heap_properties.samplerDescriptorSize + device->descriptor_offsets[2];
+    if (!device->descriptor_heap && (capacity > device->descriptor_counts[2] || size > device->descriptor_properties.maxSamplerDescriptorBufferRange))
+    {
+        if (error_callback) error_callback("Sampler descriptor capacity exceeds the device's descriptor buffer limits.", false);
+        return nullptr;
+    }
     SamplerDescriptorHeap* heap = new SamplerDescriptorHeap{
         .state = device,
-        .storage = device->allocate_descriptor_heap(uint64(capacity) * device->heap_properties.samplerDescriptorSize, DescriptorHeapType::sampler),
+        .storage = device->allocate_descriptor_heap(size, DescriptorHeapType::sampler),
         .capacity = capacity,
     };
     if (!heap->storage.owner)
@@ -2893,13 +3189,17 @@ SamplerDescriptorHeap* create_sampler_descriptor_heap(Device* device, uint32 cap
         return nullptr;
     }
     heap->descriptors = new byte[uint64(capacity) * device->heap_properties.samplerDescriptorSize];
+    if (!device->descriptor_heap) heap->objects = new DescriptorObject*[capacity]{};
     return heap;
 }
 
 void destroy_sampler_descriptor_heap(SamplerDescriptorHeap* heap) noexcept
 {
     if (!heap) return;
+    if (heap->objects)
+        for (uint32 index = 0; index < heap->capacity; ++index) release_descriptor_object(*heap->state, heap->objects[index]);
     destroy_gpu_heap(heap->storage);
+    delete[] heap->objects;
     delete[] heap->descriptors;
     delete heap;
 }
@@ -2911,11 +3211,11 @@ void copy_texture_descriptors(const TextureDescriptorHeap* source, uint32 source
     assert(source_index <= source->capacity && count <= source->capacity - source_index);
     assert(destination_index <= destination->capacity && count <= destination->capacity - destination_index);
     if (!count || (source == destination && source_index == destination_index)) return;
+    if (source->objects) copy_descriptor_objects(*source->state, {source->objects + source_index, count}, {destination->objects + destination_index, count});
     const uint64 stride = source->state->heap_properties.imageDescriptorSize;
     memmove(destination->descriptors + uint64(destination_index) * stride,
             source->descriptors + uint64(source_index) * stride, size_t(count * stride));
-    memcpy(destination->storage.range.cpu + uint64(destination_index) * stride,
-           destination->descriptors + uint64(destination_index) * stride, size_t(count * stride));
+    upload_texture_descriptors(*destination, destination_index, count);
 }
 
 void copy_sampler_descriptors(const SamplerDescriptorHeap* source, uint32 source_index, SamplerDescriptorHeap* destination,
@@ -2925,10 +3225,11 @@ void copy_sampler_descriptors(const SamplerDescriptorHeap* source, uint32 source
     assert(source_index <= source->capacity && count <= source->capacity - source_index);
     assert(destination_index <= destination->capacity && count <= destination->capacity - destination_index);
     if (!count || (source == destination && source_index == destination_index)) return;
+    if (source->objects) copy_descriptor_objects(*source->state, {source->objects + source_index, count}, {destination->objects + destination_index, count});
     const uint64 stride = source->state->heap_properties.samplerDescriptorSize;
     memmove(destination->descriptors + uint64(destination_index) * stride,
             source->descriptors + uint64(source_index) * stride, size_t(count * stride));
-    memcpy(destination->storage.range.cpu + uint64(destination_index) * stride,
+    memcpy(destination->storage.range.cpu + source->state->descriptor_offsets[2] + uint64(destination_index) * stride,
            destination->descriptors + uint64(destination_index) * stride, size_t(count * stride));
 }
 
@@ -2970,6 +3271,27 @@ void write_texture_descriptor(TextureDescriptorHeap* heap, uint32 index, const T
             .layerCount = desc.layer_count == 0 ? VK_REMAINING_ARRAY_LAYERS : desc.layer_count,
         },
     };
+    if (!device->descriptor_heap)
+    {
+        DescriptorObject* object = new DescriptorObject;
+        require_vk(vkCreateImageView(device->device, &view_info, nullptr, &object->view), "vkCreateImageView (descriptor)");
+        const VkDescriptorImageInfo image_info{.imageView = object->view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorGetInfoEXT get_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT,
+            .type = type == TextureDescriptorType::sampled ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .data = {.pSampledImage = &image_info},
+        };
+        const uint64 stride = device->heap_properties.imageDescriptorSize;
+        byte* cache = heap->descriptors + uint64(index) * stride;
+        memset(cache, 0, size_t(stride));
+        device->fn.get_descriptor(device->device, &get_info, type == TextureDescriptorType::sampled
+            ? device->descriptor_properties.sampledImageDescriptorSize : device->descriptor_properties.storageImageDescriptorSize,
+            cache + (type == TextureDescriptorType::sampled ? 0 : device->descriptor_properties.sampledImageDescriptorSize));
+        release_descriptor_object(*device, heap->objects[index]);
+        heap->objects[index] = object;
+        upload_texture_descriptors(*heap, index, 1);
+        return;
+    }
     const VkImageDescriptorInfoEXT image_descriptor{
         .sType = VK_STRUCTURE_TYPE_IMAGE_DESCRIPTOR_INFO_EXT,
         .pView = &view_info,
@@ -3012,6 +3334,22 @@ void write_sampler_descriptor(SamplerDescriptorHeap* heap, uint32 index, const S
         .address = heap->descriptors + uint64(index) * device->heap_properties.samplerDescriptorSize,
         .size = static_cast<size_t>(device->heap_properties.samplerDescriptorSize),
     };
+    if (!device->descriptor_heap)
+    {
+        DescriptorObject* object = new DescriptorObject;
+        require_vk(vkCreateSampler(device->device, &sampler_info, nullptr, &object->sampler), "vkCreateSampler (descriptor)");
+        const VkDescriptorGetInfoEXT get_info{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_GET_INFO_EXT,
+            .type = VK_DESCRIPTOR_TYPE_SAMPLER,
+            .data = {.pSampler = &object->sampler},
+        };
+        device->fn.get_descriptor(device->device, &get_info, destination.size, destination.address);
+        release_descriptor_object(*device, heap->objects[index]);
+        heap->objects[index] = object;
+        memcpy(heap->storage.range.cpu + device->descriptor_offsets[2] + uint64(index) * device->heap_properties.samplerDescriptorSize,
+               destination.address, destination.size);
+        return;
+    }
     assert_vk(device->fn.write_sampler_descriptors(device->device, 1, &sampler_info, &destination));
     memcpy(heap->storage.range.cpu + uint64(index) * device->heap_properties.samplerDescriptorSize, destination.address, destination.size);
 }
@@ -3034,31 +3372,49 @@ constexpr VkDescriptorSetAndBindingMappingEXT root_mapping{
     .sourceData = {.pushAddressOffset = 0},
 };
 
+ByteSpan shader_code(Device* device, const ShaderStage& stage) noexcept
+{
+    if (!stage.code.size) return {};
+    uint32 magic = 0;
+    if (stage.code.data && stage.code.size >= sizeof(magic)) memcpy(&magic, stage.code.data, sizeof(magic));
+    if (magic == 0x07230203u && device->descriptor_heap) return stage.code;
+    const ByteSpan code = detail::shader_package_code(stage.code, !device->descriptor_heap);
+    if (!code.size && error_callback)
+        error_callback(magic == 0x07230203u
+            ? "This device requires a NoGraphicsAPI shader package. Build shaders with NoGraphicsAPI_compile_slang or tools/compile_shader.py."
+            : "Invalid NoGraphicsAPI shader package. Rebuild the shader with the matching NoGraphicsAPI tools.", false);
+    return code;
+}
+
 PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const ShaderStage& fragment, Span<const ColorTargetDesc> color_targets,
                        Format depth_format, Format stencil_format, const RasterizationState& rasterization_state,
                        bool mesh, const ShaderStage& task = {}) noexcept
 {
     assert(device && "PSO creation called with a null device");
-    assert_spirv(first_stage.code);
-    if (task.code.size) assert_spirv(task.code);
-    if (fragment.code.size) assert_spirv(fragment.code);
+    const ByteSpan first_code = shader_code(device, first_stage);
+    const ByteSpan task_code = shader_code(device, task);
+    const ByteSpan fragment_code = shader_code(device, fragment);
+    if (!first_code.size || (task.code.size && !task_code.size) || (fragment.code.size && !fragment_code.size)) return nullptr;
+    assert_spirv(first_code);
+    if (task_code.size) assert_spirv(task_code);
+    if (fragment_code.size) assert_spirv(fragment_code);
     assert((color_targets.size == 0 || color_targets.data) && color_targets.size <= max_color_attachments &&
            "color targets must fit the wrapper's attachment array");
 
     const VkShaderModuleCreateInfo task_module_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = task.code.size,
-        .pCode = reinterpret_cast<const uint32*>(task.code.data),
+        .codeSize = task_code.size,
+        .pCode = reinterpret_cast<const uint32*>(task_code.data),
     };
     const VkShaderModuleCreateInfo first_stage_module_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = first_stage.code.size,
-        .pCode = reinterpret_cast<const uint32*>(first_stage.code.data),
+        .codeSize = first_code.size,
+        .pCode = reinterpret_cast<const uint32*>(first_code.data),
     };
     const VkShaderModuleCreateInfo fragment_module_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = fragment.code.size,
-        .pCode = reinterpret_cast<const uint32*>(fragment.code.data),
+        .codeSize = fragment_code.size,
+        .pCode = reinterpret_cast<const uint32*>(fragment_code.data),
     };
     const VkShaderDescriptorSetAndBindingMappingInfoEXT mappings[]{
         {.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT, .pNext = &task_module_info,
@@ -3071,19 +3427,19 @@ PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const Sha
     const VkPipelineShaderStageCreateInfo stages[]{
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = &mappings[0],
+            .pNext = device->descriptor_heap ? static_cast<const void*>(&mappings[0]) : &task_module_info,
             .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
             .pName = task.entry_point,
         },
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = &mappings[1],
+            .pNext = device->descriptor_heap ? static_cast<const void*>(&mappings[1]) : &first_stage_module_info,
             .stage = mesh ? VK_SHADER_STAGE_MESH_BIT_EXT : VK_SHADER_STAGE_VERTEX_BIT,
             .pName = first_stage.entry_point,
         },
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = &mappings[2],
+            .pNext = device->descriptor_heap ? static_cast<const void*>(&mappings[2]) : &fragment_module_info,
             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
             .pName = fragment.entry_point,
         },
@@ -3170,7 +3526,7 @@ PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const Sha
     const VkPipelineCreateFlags2CreateInfo flags_info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
         .pNext = &rendering_info,
-        .flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
+        .flags = device->descriptor_heap ? VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT : VK_PIPELINE_CREATE_2_DESCRIPTOR_BUFFER_BIT_EXT,
     };
     const VkGraphicsPipelineCreateInfo pso_info{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -3185,6 +3541,7 @@ PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const Sha
         .pDepthStencilState = &depth_stencil,
         .pColorBlendState = &color_blend,
         .pDynamicState = &dynamic_state,
+        .layout = device->pipeline_layout,
         .basePipelineIndex = -1,
     };
     PSO* result = new PSO{
@@ -3216,12 +3573,14 @@ PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept
 PSO* create_compute_pso(Device* device, const ShaderStage& compute) noexcept
 {
     assert(device && "create_compute_pso called with a null device");
-    assert_spirv(compute.code);
+    const ByteSpan code = shader_code(device, compute);
+    if (!code.size) return nullptr;
+    assert_spirv(code);
 
     const VkShaderModuleCreateInfo module_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = compute.code.size,
-        .pCode = reinterpret_cast<const uint32*>(compute.code.data),
+        .codeSize = code.size,
+        .pCode = reinterpret_cast<const uint32*>(code.data),
     };
     const VkShaderDescriptorSetAndBindingMappingInfoEXT mapping{
         .sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT,
@@ -3231,18 +3590,19 @@ PSO* create_compute_pso(Device* device, const ShaderStage& compute) noexcept
     };
     const VkPipelineShaderStageCreateInfo stage{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = &mapping,
+        .pNext = device->descriptor_heap ? static_cast<const void*>(&mapping) : &module_info,
         .stage = VK_SHADER_STAGE_COMPUTE_BIT,
         .pName = compute.entry_point,
     };
     const VkPipelineCreateFlags2CreateInfo flags_info{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO,
-        .flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT,
+        .flags = device->descriptor_heap ? VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT : VK_PIPELINE_CREATE_2_DESCRIPTOR_BUFFER_BIT_EXT,
     };
     const VkComputePipelineCreateInfo pso_info{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         .pNext = &flags_info,
         .stage = stage,
+        .layout = device->pipeline_layout,
         .basePipelineIndex = -1,
     };
     PSO* result = new PSO{
@@ -3265,7 +3625,8 @@ void destroy_pso(PSO* pso) noexcept
 CommandPool* create_command_pool(Device* device, uint32 queue_index) noexcept
 {
     assert(device && queue_index < device->queue_count && "create_command_pool requires an available queue index");
-    CommandPool* pool = new CommandPool{.state = device, .timestamps = device->queues[queue_index].timestamps};
+    CommandPool* pool = new CommandPool{.state = device, .timestamps = device->queues[queue_index].timestamps,
+                                       .queue_flags = device->queues[queue_index].flags};
     const VkCommandPoolCreateInfo pool_info{
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
@@ -3333,7 +3694,7 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
     }
     else
     {
-        commands = new CommandBuffer{.state = pool->state, .command_pool = pool->command_pool};
+        commands = new CommandBuffer{.state = pool->state, .command_pool = pool->command_pool, .queue_flags = pool->queue_flags};
         const VkCommandBufferAllocateInfo allocate_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = pool->command_pool,
@@ -3376,6 +3737,8 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
     commands->timestamp_count = 0;
     commands->submitted = false;
     commands->has_epilogue = false;
+    commands->texture_descriptors = nullptr;
+    commands->sampler_descriptors = nullptr;
     if (commands->timestamp_pool)
         vkResetQueryPool(pool->state->device, commands->timestamp_pool, 0, pool->state->timestamp_query_count);
     return commands;
@@ -3431,7 +3794,8 @@ void end_commands(CommandBuffer* commands) noexcept
 namespace
 {
 
-void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore) noexcept
+void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore,
+                     VkFence fence = VK_NULL_HANDLE) noexcept
 {
     detail::Queue* queue = &device->queues[queue_index];
     TimelineSemaphore* completion = desc.completion.semaphore;
@@ -3533,7 +3897,7 @@ void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index,
         .signalSemaphoreInfoCount = signal_count,
         .pSignalSemaphoreInfos = signal_infos,
     };
-    assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, VK_NULL_HANDLE));
+    assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, fence));
     for (size_t index = 0; index < desc.commands.size; ++index) desc.commands.data[index]->submitted = true;
 }
 
@@ -3568,7 +3932,8 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
     detail::PresentContext& present_context = *swapchain->present_context;
     assert(!present_context.present_pending && !present_context.swapchain);
     assert_vk(vkResetFences(device->device, 1, &present_context.presented));
-    submit_commands(device, desc, 0, present_context.acquired, present_context.rendered);
+    const VkSemaphore rendered = device->swapchain_maintenance ? present_context.rendered : swapchain->rendered[swapchain->image_index];
+    submit_commands(device, desc, 0, present_context.acquired, rendered, device->swapchain_maintenance ? VK_NULL_HANDLE : present_context.presented);
     swapchain->transition_commands->swapchain = nullptr;
     swapchain->transition_commands = nullptr;
     swapchain->initialized[swapchain->image_index] = true;
@@ -3580,9 +3945,9 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
     };
     const VkPresentInfoKHR present_info{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .pNext = &fence_info,
+        .pNext = device->swapchain_maintenance ? &fence_info : nullptr,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &present_context.rendered,
+        .pWaitSemaphores = &rendered,
         .swapchainCount = 1,
         .pSwapchains = &swapchain->handle,
         .pImageIndices = &swapchain->image_index,
@@ -3746,17 +4111,58 @@ void emit_root_pointer(CommandBuffer* commands, const void* root) noexcept
 {
     if (!root) return;
     assert((reinterpret_cast<uintptr>(root) & 15u) == 0);
+    if (!commands->state->descriptor_heap)
+    {
+        vkCmdPushConstants(commands->command_buffer, commands->state->pipeline_layout, descriptor_stages, 0, sizeof(root), &root);
+        return;
+    }
     const VkPushDataInfoEXT info{
         .sType = VK_STRUCTURE_TYPE_PUSH_DATA_INFO_EXT,
         .data = {.address = &root, .size = sizeof(root)},
     };
     commands->state->fn.cmd_push_data(commands->command_buffer, &info);
 }
+
+void bind_descriptor_buffers(CommandBuffer& commands) noexcept
+{
+    Device& device = *commands.state;
+    VkDescriptorBufferBindingInfoEXT bindings[2]{};
+    uint32 binding_count = 0;
+    if (commands.texture_descriptors)
+        bindings[binding_count++] = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+            .address = reinterpret_cast<uintptr>(commands.texture_descriptors->storage.range.gpu), .usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT};
+    const uint32 sampler_binding = binding_count;
+    if (commands.sampler_descriptors)
+        bindings[binding_count++] = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
+            .address = reinterpret_cast<uintptr>(commands.sampler_descriptors->storage.range.gpu), .usage = VK_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT};
+    device.fn.cmd_bind_descriptor_buffers(commands.command_buffer, binding_count, bindings);
+    for (VkPipelineBindPoint point : {VK_PIPELINE_BIND_POINT_GRAPHICS, VK_PIPELINE_BIND_POINT_COMPUTE})
+    {
+        if (!(commands.queue_flags & (point == VK_PIPELINE_BIND_POINT_GRAPHICS ? VK_QUEUE_GRAPHICS_BIT : VK_QUEUE_COMPUTE_BIT))) continue;
+        if (commands.texture_descriptors)
+        {
+            const uint32 indices[]{0, 0};
+            const VkDeviceSize offsets[]{0, commands.texture_descriptors->storage_offset};
+            device.fn.cmd_set_descriptor_offsets(commands.command_buffer, point, device.pipeline_layout, 1, 2, indices, offsets);
+        }
+        if (commands.sampler_descriptors)
+        {
+            const VkDeviceSize offset = 0;
+            device.fn.cmd_set_descriptor_offsets(commands.command_buffer, point, device.pipeline_layout, 3, 1, &sampler_binding, &offset);
+        }
+    }
+}
 }
 
 void set_texture_descriptor_heap(CommandBuffer* commands, TextureDescriptorHeap* heap) noexcept
 {
     assert(commands && heap && commands->state == heap->state);
+    if (!commands->state->descriptor_heap)
+    {
+        commands->texture_descriptors = heap;
+        bind_descriptor_buffers(*commands);
+        return;
+    }
     const VkPhysicalDeviceDescriptorHeapPropertiesEXT& properties = commands->state->heap_properties;
     VkBindHeapInfoEXT bind_info{};
     make_heap_bind_info(
@@ -3772,6 +4178,12 @@ void set_texture_descriptor_heap(CommandBuffer* commands, TextureDescriptorHeap*
 void set_sampler_descriptor_heap(CommandBuffer* commands, SamplerDescriptorHeap* heap) noexcept
 {
     assert(commands && heap && commands->state == heap->state);
+    if (!commands->state->descriptor_heap)
+    {
+        commands->sampler_descriptors = heap;
+        bind_descriptor_buffers(*commands);
+        return;
+    }
     const VkPhysicalDeviceDescriptorHeapPropertiesEXT& properties = commands->state->heap_properties;
     VkBindHeapInfoEXT bind_info{};
     make_heap_bind_info(gpu_range(heap->storage), properties.samplerDescriptorAlignment, properties.minSamplerHeapReservedRange, bind_info);
@@ -4138,7 +4550,7 @@ void copy_texture_to_memory(CommandBuffer* commands, Texture* source, GpuRange d
 void barrier(CommandBuffer* commands, Stage before, Access before_access, Stage after, Access after_access) noexcept
 {
     assert(commands);
-    record_barrier(commands->command_buffer, before, before_access, after, after_access);
+    record_barrier(commands, before, before_access, after, after_access);
 }
 
 } // namespace gpu

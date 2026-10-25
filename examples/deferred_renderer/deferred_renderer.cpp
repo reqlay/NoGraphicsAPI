@@ -168,11 +168,11 @@ int main()
     printf("Using %s\n", caps.device_name);
 
     // Shaders
-    const Span<byte> simulation_code = read_shader(NOGRAPHICSAPI_SIMULATION_COMPUTE_SHADER_PATH);
-    const Span<byte> gbuffer_mesh_code = read_shader(NOGRAPHICSAPI_GBUFFER_MESH_SHADER_PATH);
-    const Span<byte> gbuffer_fragment_code = read_shader(NOGRAPHICSAPI_GBUFFER_FRAGMENT_SHADER_PATH);
-    const Span<byte> deferred_vertex_code = read_shader(NOGRAPHICSAPI_DEFERRED_VERTEX_SHADER_PATH);
-    const Span<byte> deferred_fragment_code = read_shader(NOGRAPHICSAPI_DEFERRED_FRAGMENT_SHADER_PATH);
+    const gpu::Span<byte> simulation_code = read_shader(NOGRAPHICSAPI_SIMULATION_COMPUTE_SHADER_PATH);
+    const gpu::Span<byte> gbuffer_mesh_code = read_shader(NOGRAPHICSAPI_GBUFFER_MESH_SHADER_PATH);
+    const gpu::Span<byte> gbuffer_fragment_code = read_shader(NOGRAPHICSAPI_GBUFFER_FRAGMENT_SHADER_PATH);
+    const gpu::Span<byte> deferred_vertex_code = read_shader(NOGRAPHICSAPI_DEFERRED_VERTEX_SHADER_PATH);
+    const gpu::Span<byte> deferred_fragment_code = read_shader(NOGRAPHICSAPI_DEFERRED_FRAGMENT_SHADER_PATH);
     PSO* simulation_pso = create_compute_pso(device, {
         .code = {simulation_code.data, simulation_code.size}, .entry_point = "computeMain",
         .threadgroup_size = {.x = simulation_thread_count, .y = 1, .z = 1},

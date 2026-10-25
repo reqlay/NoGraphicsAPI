@@ -17,7 +17,7 @@ struct Root
 
 bool test_heaps_and_roots(gpu::Device* device, gpu::TimelineSemaphore* timeline)
 {
-    const gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_METAL_HEAP_SHADER);
+    const gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_METAL_HEAP_SHADER);
     if (!code.data) return false;
     gpu::PSO* pso = gpu::create_compute_pso(device, {
         .code = {code.data, code.size},
@@ -122,7 +122,7 @@ bool test_draws(gpu::Device* device, gpu::TimelineSemaphore* timeline)
         .extent = {.x = 8, .y = 8, .z = 1},
         .usage = gpu::TextureUsage::color_attachment | gpu::TextureUsage::transfer_source,
     };
-    const gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_METAL_DRAW_SHADER);
+    const gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_METAL_DRAW_SHADER);
     if (!code.data) return false;
     gpu::PSO* pipelines[2]{};
     gpu::TextureHeap heaps[2]{};
@@ -212,7 +212,7 @@ bool test_draws(gpu::Device* device, gpu::TimelineSemaphore* timeline)
 
 bool test_viewports_and_culling(gpu::Device* device, gpu::TimelineSemaphore* timeline)
 {
-    const gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_METAL_DRAW_SHADER);
+    const gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_METAL_DRAW_SHADER);
     if (!code.data) return false;
     const gpu::CullMode culls[]{gpu::CullMode::none, gpu::CullMode::clockwise, gpu::CullMode::counter_clockwise};
     gpu::PSO* pipelines[3]{};

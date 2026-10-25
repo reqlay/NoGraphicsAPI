@@ -41,11 +41,15 @@ int main()
         for (uint32 i = 0; i < 2; ++i)
         {
             const byte* data = readback.range.cpu + i * 256;
-            const uint32 expected = i ? 188 : 128;
+            // Vulkan fixed-point conversion permits either adjacent integer (fundamentals, floating-point to normalized fixed-point).
+            const uint32 lower = i ? 187 : 127;
             for (uint32 pixel = 0; pixel < 16; ++pixel)
-                valid = valid && data[pixel * 4] == expected && data[pixel * 4 + 1] == expected &&
-                    data[pixel * 4 + 2] == expected && data[pixel * 4 + 3] == 255;
-            printf("storage=%u view=%s channel=%u expected=%u\n", storage, i ? "sRGB" : "UNORM", data[0], expected);
+            {
+                for (uint32 channel = 0; channel < 3; ++channel)
+                    valid = valid && data[pixel * 4 + channel] >= lower && data[pixel * 4 + channel] <= lower + 1;
+                valid = valid && data[pixel * 4 + 3] == 255;
+            }
+            printf("storage=%u view=%s channel=%u expected=%u..%u\n", storage, i ? "sRGB" : "UNORM", data[0], lower, lower + 1);
         }
         reset_command_pool(pool);
         destroy_render_view(views[0]);

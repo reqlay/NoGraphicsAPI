@@ -89,8 +89,8 @@ int main() {
     printf("Using %s\n", caps.device_name);
 
 	// Shaders
-    const Span<byte> vertex_code = read_shader(NOGRAPHICSAPI_CUBE_VERTEX_SHADER_PATH);
-    const Span<byte> fragment_code = read_shader(NOGRAPHICSAPI_CUBE_FRAGMENT_SHADER_PATH);
+    const gpu::Span<byte> vertex_code = read_shader(NOGRAPHICSAPI_CUBE_VERTEX_SHADER_PATH);
+    const gpu::Span<byte> fragment_code = read_shader(NOGRAPHICSAPI_CUBE_FRAGMENT_SHADER_PATH);
 	PSO* cube_pso = create_graphics_pso(device, {
         .vertex = {.code = {vertex_code.data, vertex_code.size}, .entry_point = "vertexMain"},
         .fragment = {.code = {fragment_code.data, fragment_code.size}, .entry_point = "fragmentMain"},

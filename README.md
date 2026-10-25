@@ -1,7 +1,7 @@
 # NoGraphicsAPI
 
 NoGraphicsAPI is a C++20 graphics library for **Metal 4** devices and **Vulkan 1.4** devices with
-**`VK_EXT_descriptor_heap`** and **`VK_EXT_mesh_shader`**.
+**`VK_EXT_mesh_shader`** and either **`VK_EXT_descriptor_heap`** or **`VK_EXT_descriptor_buffer`**.
 It implements the ideas in Sebastian Aaltonen's [*No Graphics API*](https://www.sebastianaaltonen.com/blog/no-graphics-api)
 with GPU pointers, descriptor heaps, and shared Slang shaders.
 
@@ -124,9 +124,8 @@ Intel Macs, Simulator, tvOS and visionOS are not supported targets.
 The Vulkan backend targets little-endian x86-64; utility math requires AVX2 and FMA.
 Vulkan 1.4 alone is insufficient. Required extensions include:
 
-- [`VK_EXT_descriptor_heap`][descriptor-heap] — application-owned descriptor heaps.
+- [`VK_EXT_descriptor_heap`][descriptor-heap] with `VK_KHR_shader_untyped_pointers`, or `VK_EXT_descriptor_buffer` — application-owned descriptor storage.
 - [`VK_EXT_mesh_shader`][mesh-shader] — task and mesh shaders.
-- [`VK_KHR_shader_untyped_pointers`](https://docs.vulkan.org/refpages/latest/refpages/source/VK_KHR_shader_untyped_pointers.html) — descriptor-heap shader support.
 
 [`VK_KHR_device_address_commands`][address-commands] is optional: without it, command addresses resolve to backing buffers and offsets.
 [`VK_KHR_unified_image_layouts`][unified-layouts] is optional and makes the backend's common image layout efficient.
@@ -140,7 +139,7 @@ snapshots, not a live driver list. The checked Windows packages were
 [AMD Adrenalin 26.9.1](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-9-1.html)
 and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-win11-win10-release-notes.pdf).
 
-| Architecture | Driver snapshot | Products | CPU-visible heap | Required extensions |
+| Architecture | Driver snapshot | Products | CPU-visible heap | Native descriptor-heap extensions |
 | --- | --- | --- | --- | --- |
 | AMD RDNA 2 (dGPU) | Windows / Adrenalin 26.9.1 | [RX 6000][rdna2-rebar] | ReBAR | 🔴 Unsupported |
 | AMD RDNA 2 (iGPU) | Windows / Adrenalin 26.9.1 | [600M](https://vulkan.gpuinfo.org/displayreport.php?id=47714) | UMA | 🔴 Unsupported |
@@ -154,17 +153,18 @@ and [NVIDIA 616.64 WHQL](https://us.download.nvidia.com/Windows/616.64/616.64-wi
 | NVIDIA Ada Lovelace | Windows / NVIDIA 616.64 | [RTX 40 series](https://vulkan.gpuinfo.org/displayreport.php?id=51469) | ReBAR | Supported |
 | NVIDIA Blackwell | Windows / NVIDIA 616.64 | [RTX 50 series](https://vulkan.gpuinfo.org/displayreport.php?id=51573) | ReBAR | Supported |
 
-🔴 marks missing required extensions. Mapped heaps require coherent CPU-visible GPU memory.
+This table records the native descriptor-heap path; `VK_EXT_descriptor_buffer` can support drivers missing those extensions.
+Both paths still require the other features in the Vulkan implementation notes. Mapped heaps require coherent CPU-visible GPU memory.
 Enable PCIe ReBAR where available on discrete GPUs; integrated GPUs use UMA, with heap sizes depending on system configuration.
 
 GPUs without PCIe ReBAR support provide up to 256 MB of CPU-visible data heap memory. NoGraphicsAPI can be used on these GPUs,
 but applications must minimize CPU-visible data. GPU-only heaps have no ReBAR-related size limit; use copy commands to copy data
 into GPU-only heaps. Texture heaps are unaffected by PCIe ReBAR.
 
-The checked Windows RDNA 2 reports lack descriptor-heap support.
+The checked Windows RDNA 2 reports lack native descriptor-heap support; they must use the descriptor-buffer path.
 [Pascal / GTX 10](https://vulkan.gpuinfo.org/displayreport.php?id=51084) lacks the required extensions.
-Intel Windows support was not verified; the checked
-[Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) also lacks required extensions.
+Intel Windows runtime support has not been verified here; the checked
+[Arc report](https://vulkan.gpuinfo.org/displayreport.php?id=51355) lacks the native descriptor-heap extensions.
 Mesa RADV and ANV [26.2+](https://docs.mesa3d.org/relnotes/26.2.0.html) expose the required extensions
 on the reported Linux/SteamOS targets.
 
@@ -195,7 +195,8 @@ See [building and integration](docs/building.md) for iOS builds and
    SPIRV-Tools 2026.3+; make the SDK's `Bin` directory, containing `spirv-val.exe`, available on `PATH`.
 4. Use Slang 2026.14.1+ from the Vulkan SDK, or download a [standalone Windows x64 release](https://github.com/shader-slang/slang/releases),
    extract it, and add its `bin` directory to `PATH`.
-5. Install a GPU driver meeting the hardware requirements above. The Vulkan SDK does not replace
+5. Install Python 3.9+ for the offline shader package builder and make it available on `PATH`.
+6. Install a GPU driver meeting the hardware requirements above. The Vulkan SDK does not replace
    the GPU driver.
 
 Clone the repository or download its source archive, then open PowerShell in the repository directory.
@@ -224,7 +225,9 @@ To install the Release libraries and headers locally:
 cmake --install build-msvc --config Release --prefix ./install
 ```
 
-The install includes the independent NoGraphicsAPI and NoGraphicsAPIUtility CMake packages.
+The install includes the independent NoGraphicsAPI and NoGraphicsAPIUtility CMake packages, plus the public
+[`NoGraphicsAPI_compile_slang` shader builder](docs/slang.md#build-and-stage-artifacts). One build rule produces one
+shader artifact; Vulkan variants and device selection are handled by NoGraphicsAPI.
 See [building and integration](docs/building.md) for using them in your own project or building
 the library without examples and tests.
 

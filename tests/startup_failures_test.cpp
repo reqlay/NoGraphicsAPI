@@ -27,6 +27,7 @@ thread_local gpu::Span<const char* const> advertised_device_extensions{};
 thread_local gpu::Span<const char* const> advertised_instance_extensions{};
 thread_local bool reject_first_device_only = false;
 thread_local bool hide_address_commands = false;
+thread_local uint32 descriptor_layout_limit = 0;
 thread_local uint32 device_extension_queries = 0;
 uint32 command_allocations = 0, command_frees = 0;
 VkImageUsageFlags last_view_usage = 0;
@@ -52,14 +53,36 @@ VkResult VKAPI_CALL test_vkEnumerateDeviceExtensionProperties(VkPhysicalDevice p
     if (advertised_device_extensions.data && (!reject_first_device_only || device_extension_queries++ == 0))
         return enumerate_extensions(advertised_device_extensions, count, values);
     const VkResult result = vkEnumerateDeviceExtensionProperties(physical, layer, count, values);
-    if (hide_address_commands && values && result == VK_SUCCESS)
+    if ((hide_address_commands || descriptor_layout_limit) && values && result == VK_SUCCESS)
     {
         uint32 written = 0;
         for (uint32 index = 0; index < *count; ++index)
-            if (strcmp(values[index].extensionName, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME)) values[written++] = values[index];
+        {
+            if (hide_address_commands && !strcmp(values[index].extensionName, VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME)) continue;
+            if (descriptor_layout_limit && !strcmp(values[index].extensionName, VK_EXT_DESCRIPTOR_HEAP_EXTENSION_NAME)) continue;
+            values[written++] = values[index];
+        }
         *count = written;
     }
     return result;
+}
+
+void VKAPI_CALL test_vkGetDescriptorSetLayoutSupport(VkDevice device, const VkDescriptorSetLayoutCreateInfo* info, VkDescriptorSetLayoutSupport* support)
+{
+    vkGetDescriptorSetLayoutSupport(device, info, support);
+    if (!descriptor_layout_limit || info->bindingCount != 1) return;
+    for (VkBaseOutStructure* next = static_cast<VkBaseOutStructure*>(support->pNext); next; next = next->pNext)
+    {
+        if (next->sType != VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_LAYOUT_SUPPORT) continue;
+        VkDescriptorSetVariableDescriptorCountLayoutSupport* variable = reinterpret_cast<VkDescriptorSetVariableDescriptorCountLayoutSupport*>(next);
+        if (info->pBindings[0].descriptorCount > descriptor_layout_limit)
+        {
+            support->supported = VK_FALSE;
+            variable->maxVariableDescriptorCount = 0; // Undefined for unsupported layouts; drivers need not return the limit.
+        }
+        else if (variable->maxVariableDescriptorCount > descriptor_layout_limit)
+            variable->maxVariableDescriptorCount = descriptor_layout_limit;
+    }
 }
 
 VkResult VKAPI_CALL test_vkEnumerateInstanceExtensionProperties(const char* layer, uint32* count, VkExtensionProperties* values)
@@ -181,6 +204,7 @@ void VKAPI_CALL test_vkFreeCommandBuffers(VkDevice device, VkCommandPool pool, u
 #define vkEnumerateDeviceExtensionProperties test_vkEnumerateDeviceExtensionProperties
 #define vkEnumerateInstanceExtensionProperties test_vkEnumerateInstanceExtensionProperties
 #define vkEnumeratePhysicalDevices test_vkEnumeratePhysicalDevices
+#define vkGetDescriptorSetLayoutSupport test_vkGetDescriptorSetLayoutSupport
 #define vkCreateDevice test_vkCreateDevice
 #define vkCreateBuffer test_vkCreateBuffer
 #define vkAllocateMemory test_vkAllocateMemory
@@ -304,13 +328,42 @@ void extension_failures(gpu::Device* device) noexcept
     arm(nullptr);
     init = gpu::create_device({.window = reinterpret_cast<void*>(uintptr(1))});
     check(!init.device && init.error == gpu::Error::unsupported && reports == 1, "missing instance extensions fail before creating a window surface");
-    check(strstr(diagnostic, VK_KHR_SURFACE_EXTENSION_NAME) && strstr(diagnostic, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
-        && strstr(diagnostic, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME), "instance diagnostic includes missing required extensions and alternatives");
+    check(strstr(diagnostic, VK_KHR_SURFACE_EXTENSION_NAME) && !strstr(diagnostic, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME)
+        && !strstr(diagnostic, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME), "instance diagnostic omits optional surface maintenance extensions");
     check(!strstr(diagnostic, VK_KHR_WIN32_SURFACE_EXTENSION_NAME) && !strstr(diagnostic, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)
         && !strstr(diagnostic, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME), "instance diagnostic omits available and unused optional extensions");
     advertised_instance_extensions = {};
     unchanged(before);
 #endif
+}
+
+void descriptor_layout_limits(gpu::Device* device) noexcept
+{
+    VkExtensionProperties extensions[gpu::max_device_extensions]{};
+    uint32 count = 0;
+    if (gpu::enumerate_device_extensions(device->physical_device, {extensions, gpu::max_device_extensions}, count) != gpu::Error::none ||
+        !gpu::has_name({extensions, count}, VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME)) return;
+    const NativeResources before = live;
+    descriptor_layout_limit = 64;
+    arm(nullptr);
+    const gpu::DeviceInit init = gpu::create_device();
+    check(init.device && init.error == gpu::Error::none && reports == 0,
+        "descriptor buffers initialize when the layout limit is lower than the physical descriptor limits");
+    if (init.device)
+    {
+        check(!init.device->descriptor_heap, "the restricted layout test uses descriptor buffers");
+        for (uint32 value : init.device->descriptor_counts)
+            check(value > 0 && value <= descriptor_layout_limit, "private layouts respect the driver layout limit");
+        gpu::TextureDescriptorHeap* textures = gpu::create_texture_descriptor_heap(init.device, 4);
+        gpu::SamplerDescriptorHeap* samplers = gpu::create_sampler_descriptor_heap(init.device, 4);
+        check(textures && samplers, "descriptor heaps remain available with restricted layouts");
+        gpu::wait_idle(init.device);
+        gpu::destroy_texture_descriptor_heap(textures);
+        gpu::destroy_sampler_descriptor_heap(samplers);
+        gpu::destroy_device(init.device);
+    }
+    descriptor_layout_limit = 0;
+    unchanged(before);
 }
 
 void heap_failures(gpu::Device* device) noexcept
@@ -558,6 +611,7 @@ int main()
     if (!init.device) return 1;
     gpu::Device* device = init.device;
     extension_failures(device);
+    descriptor_layout_limits(device);
     const NativeResources before_device = live;
     arm("vkCreateDevice");
     init = gpu::create_device();

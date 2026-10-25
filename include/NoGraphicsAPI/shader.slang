@@ -49,6 +49,35 @@ T gpu_sampler<T : IOpaqueDescriptor = SamplerState>(uint index)
     return gpu_sampler_value<T>(gpu_sampler_heap[index]);
 }
 
+#elif defined(NOGRAPHICSAPI_DESCRIPTOR_BUFFER)
+
+#define GPU_ROOT_DEFAULT(type, name) GPU_ROOT_IMPL(type, name, 16)
+#define GPU_ROOT_IMPL(type, name, alignment) \
+    struct name##_pointer { type* address; }; \
+    [[vk::push_constant]] ConstantBuffer<name##_pointer> name##_storage; \
+    static type name = loadAligned<alignment>(name##_storage.address)
+#define GPU_ADDRESS(value) (&(value))
+
+// Separate bindings preserve the public texture index namespace without requiring mutable descriptors.
+[[vk::binding(0, 1)]] __DynamicResource<__DynamicResourceKind.General> gpu_sampled_images[];
+[[vk::binding(0, 2)]] __DynamicResource<__DynamicResourceKind.General> gpu_storage_images[];
+[[vk::binding(0, 3)]] __DynamicResource<__DynamicResourceKind.Sampler> gpu_samplers[];
+
+[ForceInline]
+T gpu_texture<T : IOpaqueDescriptor>(uint index)
+{
+    if (T.descriptorAccess == DescriptorAccess.Read)
+        return gpu_sampled_images[NonUniformResourceIndex(index)].asOpaqueDescriptor<T>();
+    else
+        return gpu_storage_images[NonUniformResourceIndex(index)].asOpaqueDescriptor<T>();
+}
+
+[ForceInline]
+T gpu_sampler<T : IOpaqueDescriptor = SamplerState>(uint index)
+{
+    return gpu_samplers[NonUniformResourceIndex(index)].asOpaqueDescriptor<T>();
+}
+
 #else
 
 #define GPU_ROOT_DEFAULT(type, name) GPU_ROOT_IMPL(type, name, 16)

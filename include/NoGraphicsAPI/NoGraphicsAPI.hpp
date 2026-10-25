@@ -629,7 +629,8 @@ struct DepthStencilState
 
 struct ShaderStage
 {
-    // Precompiled SPIR-V on Vulkan (4-byte-aligned words), metallib on Metal. Empty omits an optional stage.
+    // Precompiled .shader package on Vulkan (4-byte aligned), metallib on Metal. Empty omits an optional stage.
+    // Raw SPIR-V remains supported on native descriptor-heap devices.
     ByteSpan code = {};
     const char* entry_point = "main";
     // Metal compute/task/mesh dimensions must match the compiled numthreads. Vulkan uses the SPIR-V metadata.

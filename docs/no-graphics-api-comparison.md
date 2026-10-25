@@ -29,7 +29,7 @@ not suballocate application data or track pointer lifetimes.
 Textures and samplers occupy application-selected descriptor indices. Opaque heaps provide indexed
 writes, range copies and binding, without descriptor sets, per-material binding tables or pipeline
 resource signatures. Metal requires texture-view pools and uses sampler resource IDs. Vulkan uses native
-`VK_EXT_descriptor_heap` storage. The public contract exposes CPU descriptor operations, not arbitrary
+`VK_EXT_descriptor_heap` storage or `VK_EXT_descriptor_buffer`. The public contract exposes CPU descriptor operations, not arbitrary
 CPU/GPU descriptor-byte mutation. This retains slot ownership on both backends.
 
 Unlike the post's embedded sampler values, sampler indices refer to a separate application-owned
@@ -100,10 +100,11 @@ native presentation synchronization and image transitions.
 
 ## Native API requirements and limits
 
-Vulkan requires `VK_EXT_descriptor_heap`, `VK_KHR_shader_untyped_pointers`
-and `VK_EXT_mesh_shader`, plus the core features documented in
+Vulkan requires `VK_EXT_descriptor_heap` with `VK_KHR_shader_untyped_pointers`, or `VK_EXT_descriptor_buffer`,
+plus `VK_EXT_mesh_shader` and the core features documented in
 [Vulkan support](vulkan-support.md). Descriptor-heap pipelines use no `VkDescriptorSetLayout`,
 `VkDescriptorPool`, `VkDescriptorSet` or `VkPipelineLayout`.
+Descriptor-buffer pipelines use fixed internal descriptor layouts and a pipeline layout, with no descriptor pools or descriptor-set objects.
 
 The Metal mapping and hardware limits are documented in [Metal support](metal-support.md). Neither backend exposes every
 possible native operation. GPU-generated binding commands would need an additional interface, such as

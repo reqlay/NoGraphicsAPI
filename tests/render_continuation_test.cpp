@@ -157,8 +157,8 @@ bool record_workers(gpu::Span<Worker> workers) noexcept
 
 bool initialize(Fixture& fixture) noexcept
 {
-    gpu::Span<byte> vertex = load_test_shader(NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV);
-    gpu::Span<byte> fragment = load_test_shader(NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV);
+    gpu::Span<byte> vertex = read_shader(NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV);
+    gpu::Span<byte> fragment = read_shader(NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV);
     if (!vertex.data || !fragment.data) { free(vertex.data); free(fragment.data); return false; }
     fixture.pso = gpu::create_graphics_pso(fixture.device, {
         .vertex = {.code = {vertex.data, vertex.size}, .entry_point = "vertexMain"},

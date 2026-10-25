@@ -13,8 +13,8 @@ int main(int argc, const char* const* argv)
     if (initialized.error == gpu::Error::unsupported) return 77;
     if (initialized.error != gpu::Error::none) return 1;
     gpu::Device* device = initialized.device;
-    const gpu::Span<byte> compute_code = load_test_shader(NOGRAPHICSAPI_METAL_BARRIER_COMPUTE);
-    const gpu::Span<byte> graphics_code = load_test_shader(NOGRAPHICSAPI_METAL_BARRIER_GRAPHICS);
+    const gpu::Span<byte> compute_code = read_shader(NOGRAPHICSAPI_METAL_BARRIER_COMPUTE);
+    const gpu::Span<byte> graphics_code = read_shader(NOGRAPHICSAPI_METAL_BARRIER_GRAPHICS);
     if (!compute_code.data || !graphics_code.data)
     {
         free(compute_code.data);

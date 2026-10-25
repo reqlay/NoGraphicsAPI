@@ -29,7 +29,8 @@ For examples and tests, configure with `-DNOGRAPHICSAPI_BUILD_EXAMPLES=ON` and
 Debug Vulkan builds enable validation when installed. Metal validation is opt-in through Xcode or
 `MTL_DEBUG_LAYER=1`; see [Metal validation](metal-validation.md) for supported instrumentation and known driver issues.
 Apple example/test shader builds require stock Slang 2026.18.2+ and Xcode's Metal compiler. Vulkan shader builds require
-Slang 2026.14.1+ and SPIRV-Tools 2026.3+. Shader tools are not required for a library-only build.
+Python 3.9+, Slang 2026.14.1+, and SPIRV-Tools 2026.3+. Shader tools are not required for a library-only build.
+The public [shader build helper](slang.md#build-and-stage-artifacts) is available through both source and installed packages.
 
 For iOS, disable desktop examples and tests and select the device SDK:
 

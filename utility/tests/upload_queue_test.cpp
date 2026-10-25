@@ -108,7 +108,7 @@ static bool initialize(Fixture& fixture)
     fixture.readback = create_gpu_heap(fixture.device, readback_bytes, MemoryType::readback);
     if (!fixture.readback.owner) return false;
 #if defined(NOGRAPHICSAPI_UPLOAD_QUEUE_SPV_PATH)
-    Span<byte> code = load_test_shader(NOGRAPHICSAPI_UPLOAD_QUEUE_SPV_PATH);
+    gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_UPLOAD_QUEUE_SPV_PATH);
     if (!code.data) return false;
     fixture.compute = create_compute_pso(fixture.device, {.code = {code.data, code.size}, .entry_point = "computeMain",
         .threadgroup_size = {.x = upload_queue_thread_count, .y = 1, .z = 1}});

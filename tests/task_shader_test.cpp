@@ -1,6 +1,7 @@
 #include <NoGraphicsAPI/NoGraphicsAPI.hpp>
 #include "task_shader_shared.h"
 #include "task_mesh_shared.h"
+#include "shader_code.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -18,12 +19,6 @@ static const uint64 pixel_bytes = task_test_width * task_test_height * 4;
 static const uint64 data_bytes = sizeof(TaskTestData) + sizeof(gpu::uint32x3);
 static const uint64 root_offset = (data_bytes + 15) & ~uint64(15);
 
-struct ShaderCode
-{
-    uint32 words[8192];
-    uint32 size = 0;
-};
-
 struct Fixture
 {
     gpu::Device* device = nullptr;
@@ -38,41 +33,29 @@ struct Fixture
     gpu::TimelinePoint completion{};
 };
 
-static bool load_shader(const char* path, ShaderCode& code) noexcept
-{
-    FILE* file = fopen(path, "rb");
-    if (!file) { fprintf(stderr, "Cannot open task test shader: %s\n", path); return false; }
-    fseek(file, 0, SEEK_END);
-    long bytes = ftell(file);
-    rewind(file);
-    if (bytes < 20 || uint64(bytes) > sizeof(code.words)) { fclose(file); return false; }
-    bool read = fread(code.words, 1, size_t(bytes), file) == size_t(bytes);
-    fclose(file);
-    if (!read) return false;
-#ifdef __APPLE__
-    if (memcmp(code.words, "MTLB", 4) != 0) return false;
-#else
-    if ((bytes & 3) || code.words[0] != 0x07230203u) return false;
-#endif
-    code.size = uint32(bytes);
-    return true;
-}
-
 static bool initialize(Fixture& fixture) noexcept
 {
-    ShaderCode task{};
-    ShaderCode mesh{};
-    ShaderCode fragment{};
-    if (!load_shader(NOGRAPHICSAPI_TASK_TEST_TASK_SHADER, task) || !load_shader(NOGRAPHICSAPI_TASK_TEST_MESH_SHADER, mesh)
-        || !load_shader(NOGRAPHICSAPI_TASK_TEST_FRAGMENT_SHADER, fragment)) return false;
+    const gpu::Span<byte> task = read_shader(NOGRAPHICSAPI_TASK_TEST_TASK_SHADER);
+    const gpu::Span<byte> mesh = read_shader(NOGRAPHICSAPI_TASK_TEST_MESH_SHADER);
+    const gpu::Span<byte> fragment = read_shader(NOGRAPHICSAPI_TASK_TEST_FRAGMENT_SHADER);
+    if (!task.data || !mesh.data || !fragment.data)
+    {
+        free(task.data);
+        free(mesh.data);
+        free(fragment.data);
+        return false;
+    }
     fixture.pso = gpu::create_mesh_pso(fixture.device, {
-        .task = {.code = {task.words, task.size}, .entry_point = "taskMain",
+        .task = {.code = {task.data, task.size}, .entry_point = "taskMain",
             .threadgroup_size = {.x = task_test_batch_size, .y = 1, .z = 1}},
-        .mesh = {.code = {mesh.words, mesh.size}, .entry_point = "meshMain",
+        .mesh = {.code = {mesh.data, mesh.size}, .entry_point = "meshMain",
             .threadgroup_size = {.x = task_test_batch_size, .y = 1, .z = 1}},
-        .fragment = {.code = {fragment.words, fragment.size}, .entry_point = "fragmentMain"},
+        .fragment = {.code = {fragment.data, fragment.size}, .entry_point = "fragmentMain"},
         .color_targets = {{.format = gpu::Format::rgba8_unorm}},
     });
+    free(task.data);
+    free(mesh.data);
+    free(fragment.data);
     if (!fixture.pso) return false;
     const gpu::TextureDesc target_desc{
         .extent = {.x = task_test_width, .y = task_test_height, .z = 1},

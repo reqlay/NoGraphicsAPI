@@ -34,7 +34,7 @@ struct Fixture
 
 static bool initialize(Fixture& fixture) noexcept
 {
-    Span<byte> code = load_test_shader(NOGRAPHICSAPI_QUEUE_FAMILY_SPV);
+    gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_QUEUE_FAMILY_SPV);
     if (!code.data) return false;
     fixture.compute = create_compute_pso(fixture.device, {.code = {code.data, code.size},
         .entry_point = "computeMain", .threadgroup_size = {.x = 8, .y = 8, .z = 1}});

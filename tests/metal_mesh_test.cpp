@@ -11,7 +11,7 @@ int main(int argc, const char* const* argv)
     gpu::Device* device = initialized.device;
     const bool test_indirect = !direct_only && gpu::get_device_caps(device).indirect_mesh_draw;
     if (!direct_only && !test_indirect) printf("Native indirect mesh draws unavailable; testing direct mesh draws.\n");
-    const gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_METAL_MESH_SHADER);
+    const gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_METAL_MESH_SHADER);
     if (!code.data) { gpu::destroy_device(device); return 1; }
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
     gpu::PSO* pipeline = gpu::create_mesh_pso(device, {

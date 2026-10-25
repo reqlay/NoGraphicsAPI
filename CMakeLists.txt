@@ -90,6 +90,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_subdirectory(utility)
+include(cmake/NoGraphicsAPIShaders.cmake)
 
 if(NOGRAPHICSAPI_BUILD_EXAMPLES)
     add_subdirectory(examples)
@@ -131,6 +132,8 @@ install(EXPORT NoGraphicsAPITargets
 install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/NoGraphicsAPIConfigVersion.cmake
+        cmake/NoGraphicsAPIShaders.cmake
+        tools/compile_shader.py
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/NoGraphicsAPI
 )
 install(FILES

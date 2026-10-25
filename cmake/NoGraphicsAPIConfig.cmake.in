@@ -6,5 +6,6 @@ if(NOT APPLE)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/NoGraphicsAPITargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/NoGraphicsAPIShaders.cmake")
 
 check_required_components(NoGraphicsAPI)

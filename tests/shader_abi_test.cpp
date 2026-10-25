@@ -17,7 +17,7 @@ constexpr uint32 sampler_count = 4000;
 
 static bool test_shader_abi(gpu::Device* device)
 {
-    gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_SHADER_ABI_PATH);
+    gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_SHADER_ABI_PATH);
     if (!code.data) return false;
     gpu::PSO* pso = gpu::create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "computeMain",
         .threadgroup_size = {.x = shader_abi_thread_count, .y = 1, .z = 1}});
@@ -62,6 +62,8 @@ static bool test_shader_abi(gpu::Device* device)
         gpu::write_texture_descriptor(source_views, i, textures[0], gpu::TextureDescriptorType::sampled);
         gpu::write_sampler_descriptor(source_samplers, i, {});
     }
+    gpu::destroy_texture_descriptor_heap(source_views);
+    gpu::destroy_sampler_descriptor_heap(source_samplers);
     gpu::TimelineSemaphore* timeline = gpu::create_timeline_semaphore(device);
     if (!timeline) return false;
     ShaderAbiRoot root{
@@ -106,8 +108,6 @@ static bool test_shader_abi(gpu::Device* device)
     gpu::destroy_gpu_heap(readback);
     gpu::destroy_gpu_heap(output);
     gpu::destroy_gpu_heap(upload);
-    gpu::destroy_sampler_descriptor_heap(source_samplers);
-    gpu::destroy_texture_descriptor_heap(source_views);
     gpu::destroy_sampler_descriptor_heap(samplers);
     gpu::destroy_texture_descriptor_heap(views);
     for (gpu::Texture* texture : textures) gpu::destroy_texture(texture);

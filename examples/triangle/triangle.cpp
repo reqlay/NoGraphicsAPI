@@ -22,8 +22,8 @@ int main()
 
     printf("Using %s\n", get_device_caps(device).device_name);
 
-    const Span<byte> vertex_code = read_shader(NOGRAPHICSAPI_VERTEX_SHADER_PATH);
-    const Span<byte> fragment_code = read_shader(NOGRAPHICSAPI_FRAGMENT_SHADER_PATH);
+    const gpu::Span<byte> vertex_code = read_shader(NOGRAPHICSAPI_VERTEX_SHADER_PATH);
+    const gpu::Span<byte> fragment_code = read_shader(NOGRAPHICSAPI_FRAGMENT_SHADER_PATH);
     PSO* triangle_pso = create_graphics_pso(device, {
         .vertex = {.code = {vertex_code.data, vertex_code.size}, .entry_point = "vertexMain"},
         .fragment = {.code = {fragment_code.data, fragment_code.size}, .entry_point = "fragmentMain"},

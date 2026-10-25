@@ -1,6 +1,7 @@
 #include "root_data_generate_shared.h"
 #include <NoGraphicsAPIUtility/bump_allocator.hpp>
 #include "shader_code.h"
+#include <string.h>
 #include <stddef.h>
 
 static_assert(sizeof(RootData) == 256 && offsetof(RootData, values) == 16);
@@ -8,7 +9,7 @@ static_assert(sizeof(RootDataGenerate) == 32);
 
 static gpu::PSO* load_compute(gpu::Device* device, const char* path, uint32 threads)
 {
-    gpu::Span<byte> code = load_test_shader(path);
+    gpu::Span<byte> code = read_shader(path);
     if (!code.data) return nullptr;
     gpu::PSO* pso = gpu::create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "computeMain",
         .threadgroup_size = {.x = threads, .y = 1, .z = 1}});

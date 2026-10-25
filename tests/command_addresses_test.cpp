@@ -1,4 +1,5 @@
 #include "shader_code.h"
+#include <string.h>
 
 int main()
 {
@@ -6,8 +7,8 @@ int main()
     if (initialized.error == gpu::Error::unsupported) return 77;
     if (initialized.error != gpu::Error::none) return 1;
     gpu::Device* device = initialized.device;
-    const gpu::Span<byte> vertex = load_test_shader(NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV);
-    const gpu::Span<byte> fragment = load_test_shader(NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV);
+    const gpu::Span<byte> vertex = read_shader(NOGRAPHICSAPI_CONTINUATION_VERTEX_SPV);
+    const gpu::Span<byte> fragment = read_shader(NOGRAPHICSAPI_CONTINUATION_FRAGMENT_SPV);
     if (!vertex.data || !fragment.data) return 1;
     gpu::PSO* pso = gpu::create_graphics_pso(device, {
         .vertex = {.code = {vertex.data, vertex.size}, .entry_point = "vertexMain"},

@@ -413,7 +413,7 @@ void update_descriptors(void* argument) noexcept
 
 bool test_descriptors(gpu::Device* device) noexcept
 {
-    gpu::Span<byte> code = load_test_shader(NOGRAPHICSAPI_CONCURRENCY_SHADER);
+    gpu::Span<byte> code = read_shader(NOGRAPHICSAPI_CONCURRENCY_SHADER);
     if (!code.data) return false;
     gpu::PSO* pso = gpu::create_compute_pso(device, {.code = {code.data, code.size}, .entry_point = "computeMain",
                                                    .threadgroup_size = {.x = 8, .y = 8, .z = 1}});

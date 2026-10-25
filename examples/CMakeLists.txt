@@ -1,4 +1,14 @@
-include(NoGraphicsAPI_slang.cmake)
+function(NoGraphicsAPI_add_example target)
+    add_executable(${target} ${ARGN})
+    foreach(source IN LISTS ARGN)
+        if(source MATCHES "\\.slang$")
+            set_source_files_properties(${source} PROPERTIES HEADER_FILE_ONLY TRUE)
+            source_group("Shaders" FILES ${source})
+        endif()
+    endforeach()
+    NoGraphicsAPI_disable_exceptions(${target})
+    target_link_libraries(${target} PRIVATE NoGraphicsAPI_example_support)
+endfunction()
 
 add_library(NoGraphicsAPI_example_support STATIC
     common/example_support.cpp
