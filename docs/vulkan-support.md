@@ -46,10 +46,13 @@ Debug builds enable `VK_EXT_debug_utils` and the Khronos validation layer when a
 
 ## GPU heaps and application-side allocation
 
-The backend requires device-local host-visible coherent memory for mapped heaps and descriptor
-heaps, plus compatible device-local memory for GPU-only heaps and textures. GPU-only selections
+The backend requires device-local host-visible coherent memory for upload heaps and descriptor
+heaps, plus compatible device-local memory for GPU-only heaps and textures. Readback heaps require
+host-visible coherent memory and prefer host-cached types, including system RAM on discrete GPUs.
+They stay mapped; callers must complete GPU writes and make them available to host reads before accessing them.
+Coherent memory needs no explicit mapped-range invalidation. GPU-only selections
 prefer a non-host-visible type, but can use a host-visible UMA type without mapping or exposing it.
-There is no host-only or non-coherent fallback path.
+Upload and descriptor heaps have no host-only fallback. Non-coherent mapped memory is not used.
 
 `create_gpu_heap()` returns one application-sized block. `cpu_visible`, `gpu_only`, and `readback`
 provide addressable data storage. Opaque texture and sampler descriptor heaps use separate creation APIs.

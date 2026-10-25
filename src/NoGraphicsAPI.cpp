@@ -1307,7 +1307,7 @@ GpuHeap Device::allocate_gpu_heap(VkDeviceSize size, MemoryType memory) noexcept
         avoided = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
         break;
     case MemoryType::readback:
-        required = cpu_visible_memory_properties;
+        required = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         preferred = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
         break;
     default:
