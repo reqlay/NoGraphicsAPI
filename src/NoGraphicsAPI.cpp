@@ -3383,7 +3383,9 @@ void write_sampler_descriptor(SamplerDescriptorHeap* heap, uint32 index, const S
         .addressModeV = static_cast<VkSamplerAddressMode>(desc.address_v),
         .addressModeW = static_cast<VkSamplerAddressMode>(desc.address_w),
         .anisotropyEnable = desc.anisotropic ? VK_TRUE : VK_FALSE,
-        .maxAnisotropy = desc.anisotropic ? 4.0f : 1.0f,
+        .maxAnisotropy = !desc.anisotropic ? 1.0f
+                       : float(desc.max_anisotropy) < device->physical_properties.limits.maxSamplerAnisotropy ? float(desc.max_anisotropy)
+                       : device->physical_properties.limits.maxSamplerAnisotropy,
         .compareEnable = desc.compare_enabled ? VK_TRUE : VK_FALSE,
         .compareOp = static_cast<VkCompareOp>(desc.compare),
         .maxLod = VK_LOD_CLAMP_NONE,

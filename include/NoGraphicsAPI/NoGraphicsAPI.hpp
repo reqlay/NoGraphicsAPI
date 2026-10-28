@@ -557,9 +557,10 @@ struct SamplerDesc
     AddressMode address_u = AddressMode::repeat;
     AddressMode address_v = AddressMode::repeat;
     AddressMode address_w = AddressMode::repeat;
-    bool anisotropic = false; // Uses the API's fixed 4x profile.
+    bool anisotropic = false;
     bool compare_enabled = false;
     CompareOp compare = CompareOp::less_equal;
+    uint8 max_anisotropy = 4; // 2 to 16 when anisotropic is set, clamped to the device limit.
 };
 
 struct BlendComponentState

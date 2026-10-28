@@ -1026,7 +1026,7 @@ void write_sampler_descriptor(SamplerDescriptorHeap* heap, uint32 index, const S
         sampler.sAddressMode = address_modes[static_cast<uint32>(desc.address_u)];
         sampler.tAddressMode = address_modes[static_cast<uint32>(desc.address_v)];
         sampler.rAddressMode = address_modes[static_cast<uint32>(desc.address_w)];
-        sampler.maxAnisotropy = desc.anisotropic ? 4 : 1;
+        sampler.maxAnisotropy = desc.anisotropic ? desc.max_anisotropy : 1;
         sampler.compareFunction = desc.compare_enabled ? static_cast<MTLCompareFunction>(desc.compare) : MTLCompareFunctionNever;
         sampler.supportArgumentBuffers = YES;
         id<MTLSamplerState> state = [heap->device->metal newSamplerStateWithDescriptor:sampler];
