@@ -1574,6 +1574,7 @@ struct Candidate
     bool unified_image_layouts = false;
     bool address_commands = false;
     bool image_cube_array = false;
+    bool sample_rate_shading = false;
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
     bool texture_compression_etc2 = false;
@@ -1729,6 +1730,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     result.address_commands = address_commands_extension && features.address_commands.deviceAddressCommands == VK_TRUE;
 #endif
     result.image_cube_array = features.core.features.imageCubeArray == VK_TRUE;
+    result.sample_rate_shading = features.core.features.sampleRateShading == VK_TRUE;
     result.texture_compression_bc = features.core.features.textureCompressionBC == VK_TRUE;
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
@@ -2134,6 +2136,8 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     QueriedFeatures enabled_features(state->swapchain_maintenance, selected.unified_image_layouts, selected.address_commands, state->descriptor_heap);
     state->texture_compression_etc2 = selected.texture_compression_etc2;
     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
+    // Shaders that read SV_SampleIndex need it
+    enabled_features.core.features.sampleRateShading = selected.sample_rate_shading;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
     enabled_features.core.features.shaderInt16 = VK_TRUE;
     enabled_features.core.features.depthBiasClamp = VK_TRUE;
@@ -2965,7 +2969,7 @@ void prepare_texture(Device& device, const TextureDesc& desc, PreparedTexture& o
         },
         .mipLevels = desc.mip_levels,
         .arrayLayers = desc.layer_count,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = static_cast<VkSampleCountFlagBits>(desc.sample_count),
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = usage,
         .sharingMode = device.queue_family_count > 1 ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
@@ -3523,7 +3527,7 @@ PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const Sha
     };
     const VkPipelineMultisampleStateCreateInfo multisample{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .rasterizationSamples = static_cast<VkSampleCountFlagBits>(rasterization_state.sample_count),
     };
     const VkPipelineDepthStencilStateCreateInfo depth_stencil{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,

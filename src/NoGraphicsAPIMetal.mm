@@ -116,6 +116,7 @@ MTLTextureType texture_type(TextureType type)
 
 MTLTextureDescriptor* texture_descriptor(const TextureDesc& desc)
 {
+    assert(desc.sample_count == 1 && "Multisampled textures are implemented only on Vulkan");
     MTLTextureDescriptor* result = [MTLTextureDescriptor new];
     result.textureType = texture_type(desc.type);
     result.pixelFormat = pixel_format(desc.format);
@@ -1109,6 +1110,7 @@ void color_targets(MTL4RenderPipelineColorAttachmentDescriptorArray* attachments
 PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
 {
     assert(desc.vertex.code.size && "Graphics PSOs require a vertex stage");
+    assert(desc.rasterization.sample_count == 1 && "Multisampled rasterization is implemented only on Vulkan");
     @autoreleasepool
     {
         MTL4RenderPipelineDescriptor* pipeline = [MTL4RenderPipelineDescriptor new];
@@ -1136,6 +1138,7 @@ PSO* create_graphics_pso(Device* device, const GraphicsPSODesc& desc) noexcept
 PSO* create_mesh_pso(Device* device, const MeshPSODesc& desc) noexcept
 {
     assert(desc.mesh.code.size && "Mesh PSOs require a mesh stage");
+    assert(desc.rasterization.sample_count == 1 && "Multisampled rasterization is implemented only on Vulkan");
     @autoreleasepool
     {
         MTL4MeshRenderPipelineDescriptor* pipeline = [MTL4MeshRenderPipelineDescriptor new];

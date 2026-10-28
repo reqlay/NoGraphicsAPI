@@ -515,6 +515,7 @@ struct TextureDesc
     uint32 mip_levels = 1;
     uint32 layer_count = 1; // Vulkan array layers; cube faces are individual layers.
     Format format = Format::rgba8_unorm;
+    uint8 sample_count = 1; // 1, 2, 4 or 8. Multisampled textures are 2D with one mip level. Vulkan only.
     bool mutable_format = false; // Allow format-compatible descriptor views, but could lose DCC.
     bool srgb_views = false; // Allow just the paired sRGB/UNORM views; preserves Metal color compression.
     TextureUsage usage = TextureUsage::sampled;
@@ -585,6 +586,7 @@ struct ColorTargetDesc
 struct RasterizationState
 {
     CullMode cull = CullMode::none;
+    uint8 sample_count = 1; // Must match the render pass attachments. Vulkan only.
     float depth_bias_constant = 0.0f;
     float depth_bias_clamp = 0.0f;
     float depth_bias_slope = 0.0f;
