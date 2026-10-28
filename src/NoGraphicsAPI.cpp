@@ -53,11 +53,7 @@ constexpr uint32 max_queue_families = 64;
 constexpr uint32 queue_type_count = 3; // General, compute-only, copy-only.
 constexpr uint32 max_color_attachments = 8;
 constexpr uint32 max_swapchain_images = 8;
-#if defined(NOGRAPHICSAPI_TEST_IMMEDIATE_PRESENT)
-constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
-#else
-constexpr VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-#endif
+constexpr uint32 max_present_modes = 16;
 constexpr uint32 gpu_allocation_alignment = 16;
 constexpr uint32 max_surface_formats = 64;
 constexpr uint32 format_count = static_cast<uint32>(Format::undefined);
@@ -725,6 +721,7 @@ struct Device
     uint32 queue_count = 0;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     uint32x2 window_extent{}; // from set_window_extent, for surfaces without a current extent
+    bool vsync = true; // from DeviceDesc::vsync and set_vsync
     uint32 queue_families[queue_type_count]{};
     uint32 queue_family_count = 0;
     uint32 timestamp_query_count = 0;
@@ -1938,6 +1935,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     Device* state = new Device;
     state->timestamp_query_count = desc.timestamp_query_count;
     state->present_context_count = presentation ? desc.desired_swapchain_image_count : 0;
+    state->vsync = desc.vsync;
     VkExtensionProperties instance_extensions[max_instance_extensions]{};
     uint32 instance_extension_count = 0;
     error = enumerate_instance_extensions({instance_extensions, max_instance_extensions}, instance_extension_count);
@@ -2599,13 +2597,37 @@ VkExtent2D surface_extent(const Device& device, const VkSurfaceCapabilitiesKHR& 
            choose_composite_alpha(capabilities.supportedCompositeAlpha) != swapchain.composite_alpha;
 }
 
+// FIFO waits for vertical blank and every surface supports it. Without vsync, immediate presentation tears but
+// waits for nothing; mailbox replaces the queued image without tearing where immediate is missing.
+VkPresentModeKHR choose_present_mode(const Device& device) noexcept
+{
+#if !defined(NOGRAPHICSAPI_TEST_IMMEDIATE_PRESENT)
+    if (device.vsync)
+        return VK_PRESENT_MODE_FIFO_KHR;
+#endif
+    VkPresentModeKHR modes[max_present_modes]{};
+    uint32 mode_count = max_present_modes;
+    const VkResult result = vkGetPhysicalDeviceSurfacePresentModesKHR(device.physical_device, device.surface, &mode_count, modes);
+    if (result != VK_SUCCESS && result != VK_INCOMPLETE)
+        return VK_PRESENT_MODE_FIFO_KHR;
+    bool mailbox = false;
+    for (uint32 index = 0; index < mode_count; ++index)
+    {
+        if (modes[index] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+            return VK_PRESENT_MODE_IMMEDIATE_KHR;
+        mailbox = mailbox || modes[index] == VK_PRESENT_MODE_MAILBOX_KHR;
+    }
+    return mailbox ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_FIFO_KHR;
+}
+
 Error recreate_swapchain(Swapchain& swapchain) noexcept
 {
     Device& device = *swapchain.state;
     assert(!swapchain.acquired && !device.acquired_swapchain);
+    const VkPresentModeKHR present_mode = choose_present_mode(device);
     const VkSurfacePresentModeKHR present_mode_info{
         .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
-        .presentMode = swapchain_present_mode,
+        .presentMode = present_mode,
     };
     const VkPhysicalDeviceSurfaceInfo2KHR surface_info{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
@@ -2678,7 +2700,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
     const VkSwapchainPresentModesCreateInfoKHR present_modes_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODES_CREATE_INFO_KHR,
         .presentModeCount = 1,
-        .pPresentModes = &swapchain_present_mode,
+        .pPresentModes = &present_mode,
     };
     const VkSwapchainCreateInfoKHR create_info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -2695,7 +2717,7 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         .pQueueFamilyIndices = device.queue_families,
         .preTransform = capabilities.currentTransform,
         .compositeAlpha = composite_alpha,
-        .presentMode = swapchain_present_mode,
+        .presentMode = present_mode,
         .clipped = VK_TRUE,
         .oldSwapchain = old_handle,
     };
@@ -2852,6 +2874,16 @@ void set_window_extent(Device* device, uint32x2 extent) noexcept
     Swapchain* swapchain = device->swapchain;
     if (swapchain && swapchain->handle && (swapchain->width != extent.x || swapchain->height != extent.y))
         swapchain->recreate_required = true;
+}
+
+void set_vsync(Device* device, bool vsync) noexcept
+{
+    assert(device && "set_vsync called with a null device");
+    if (device->vsync == vsync)
+        return;
+    device->vsync = vsync;
+    if (device->swapchain && device->swapchain->handle)
+        device->swapchain->recreate_required = true;
 }
 
 SwapchainFrame acquire(CommandBuffer* commands) noexcept

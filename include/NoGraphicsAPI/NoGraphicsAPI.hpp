@@ -489,6 +489,7 @@ struct DeviceDesc
     Format swapchain_format = Format::undefined;
     ColorSpace swapchain_color_space = ColorSpace::srgb;
     uint32 desired_swapchain_image_count = 2; // Vulkan: 1..8 presentation contexts. Metal clamps to 2..3 drawables.
+    bool vsync = true; // See set_vsync.
     bool steam_overlay_compatibility = false; // macOS only: allow drawable texture views and use classic Metal presentation.
     // Counts are capped to each family's capacity. A nonzero request requires that kind of queue to be available.
     uint32 desired_queue_count = 1; // General graphics + compute queues; must be nonzero.
@@ -733,6 +734,9 @@ void destroy_device(Device* device) noexcept;
 // Sizes the swapchain in pixels where the surface leaves the size to the application, as Wayland surfaces do.
 // Call it whenever the window size changes; surfaces that report their own size ignore it.
 void set_window_extent(Device* device, uint32x2 extent) noexcept;
+// With vsync, presentation waits for vertical blank. Without it, Vulkan presents immediately where the surface allows,
+// tearing, and otherwise through mailbox or FIFO; macOS turns off the layer's display sync. Applies from the next acquire.
+void set_vsync(Device* device, bool vsync) noexcept;
 // Call after wait_idle, outside an acquired frame. Unsupported pairs leave the current mode unchanged.
 // A zero-size drawable defers swapchain recreation until acquire sees a nonzero extent.
 [[nodiscard]] Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept;

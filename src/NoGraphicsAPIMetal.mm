@@ -604,6 +604,9 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
             device->layer.device = device->metal;
             device->layer.pixelFormat = pixel_format(desc.swapchain_format == Format::undefined ? Format::bgra8_unorm : desc.swapchain_format);
             device->layer.maximumDrawableCount = desc.desired_swapchain_image_count < 3 ? 2 : 3;
+#if TARGET_OS_OSX
+            device->layer.displaySyncEnabled = desc.vsync;
+#endif
             [device->queues[0].queue addResidencySet:device->layer.residencySet];
             device->layer.framebufferOnly = YES;
 #if TARGET_OS_OSX
@@ -705,6 +708,17 @@ Error set_swapchain_format(Device* device, Format format, ColorSpace color_space
 // CAMetalLayer takes its drawable size from the layer, so there is no application-supplied extent to apply
 void set_window_extent(Device*, uint32x2) noexcept
 {
+}
+
+void set_vsync(Device* device, bool vsync) noexcept
+{
+#if TARGET_OS_OSX
+    if (device->layer)
+        device->layer.displaySyncEnabled = vsync;
+#else
+    (void)device;
+    (void)vsync;
+#endif
 }
 
 uint32x2 get_drawable_extent(Device* device) noexcept
