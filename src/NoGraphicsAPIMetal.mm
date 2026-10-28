@@ -702,6 +702,11 @@ Error set_swapchain_format(Device* device, Format format, ColorSpace color_space
     }
 }
 
+// CAMetalLayer takes its drawable size from the layer, so there is no application-supplied extent to apply
+void set_window_extent(Device*, uint32x2) noexcept
+{
+}
+
 uint32x2 get_drawable_extent(Device* device) noexcept
 {
     @autoreleasepool

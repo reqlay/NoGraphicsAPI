@@ -485,6 +485,7 @@ struct DeviceDesc
 {
     void* window = nullptr; // HWND on Windows; CAMetalLayer* on macOS/iOS. Null creates a headless device.
     void* display = nullptr; // X11 Display* on Linux, where window holds the X11 Window id. Unused elsewhere.
+    bool wayland = false; // On Linux, display is a wl_display* and window a wl_surface* instead. See set_window_extent.
     Format swapchain_format = Format::undefined;
     ColorSpace swapchain_color_space = ColorSpace::srgb;
     uint32 desired_swapchain_image_count = 2; // Vulkan: 1..8 presentation contexts. Metal clamps to 2..3 drawables.
@@ -729,6 +730,9 @@ void destroy_device(Device* device) noexcept;
 [[nodiscard]] const DeviceCaps& get_device_caps(const Device* device) noexcept;
 [[nodiscard]] bool supports_texture_format(const Device* device, Format format, TextureUsage usage) noexcept;
 [[nodiscard]] uint32x2 get_drawable_extent(Device* device) noexcept;
+// Sizes the swapchain in pixels where the surface leaves the size to the application, as Wayland surfaces do.
+// Call it whenever the window size changes; surfaces that report their own size ignore it.
+void set_window_extent(Device* device, uint32x2 extent) noexcept;
 // Call after wait_idle, outside an acquired frame. Unsupported pairs leave the current mode unchanged.
 // A zero-size drawable defers swapchain recreation until acquire sees a nonzero extent.
 [[nodiscard]] Error set_swapchain_format(Device* device, Format format, ColorSpace color_space) noexcept;
