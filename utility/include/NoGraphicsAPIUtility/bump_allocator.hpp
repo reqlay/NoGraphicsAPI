@@ -46,9 +46,13 @@ public:
     // Reset invalidates every previous allocation.
     void reset() noexcept;
 
+    // Set when an allocation failed for lack of storage; stays set until reset().
+    [[nodiscard]] bool exhausted() const noexcept { return exhausted_; }
+
 private:
     GpuCpuRange<byte> storage_{};
     alignas(8) uint64 offset_ = 0;
+    bool exhausted_ = false;
 };
 
 } // namespace gpu

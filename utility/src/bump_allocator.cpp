@@ -58,7 +58,10 @@ GpuCpuRange<byte> BumpAllocator::allocate(uint64 byte_size) noexcept
 {
     assert(byte_size != 0);
     if (byte_size > storage_.size - offset_)
+    {
+        exhausted_ = true;
         return {};
+    }
 
     const GpuCpuRange<byte> allocation{
         .cpu = offset_pointer(storage_.cpu, offset_),
@@ -82,7 +85,10 @@ GpuCpuRange<byte> BumpAllocator::allocate_atomic(uint64 byte_size) noexcept
     for (;;)
     {
         if (byte_size > storage_.size - allocation_offset)
+        {
+            exhausted_ = true;
             return {};
+        }
 
         const uint64 remaining = storage_.size - allocation_offset;
         const uint64 aligned_size = (byte_size + alignment - 1) & ~(alignment - 1);
@@ -111,6 +117,7 @@ GpuCpuRange<byte> BumpAllocator::allocate_atomic(uint64 byte_size) noexcept
 void BumpAllocator::reset() noexcept
 {
     offset_ = 0;
+    exhausted_ = false;
 }
 
 } // namespace gpu
