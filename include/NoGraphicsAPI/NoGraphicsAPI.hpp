@@ -593,6 +593,7 @@ struct RasterizationState
 {
     CullMode cull = CullMode::none;
     uint8 sample_count = 1; // Must match the render pass attachments. Vulkan only.
+    bool alpha_to_coverage = false;
     float depth_bias_constant = 0.0f;
     float depth_bias_clamp = 0.0f;
     float depth_bias_slope = 0.0f;

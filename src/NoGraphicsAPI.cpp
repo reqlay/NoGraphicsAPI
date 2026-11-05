@@ -3649,6 +3649,7 @@ PSO* create_raster_pso(Device* device, const ShaderStage& first_stage, const Sha
     const VkPipelineMultisampleStateCreateInfo multisample{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .rasterizationSamples = static_cast<VkSampleCountFlagBits>(rasterization_state.sample_count),
+        .alphaToCoverageEnable = rasterization_state.alpha_to_coverage ? VK_TRUE : VK_FALSE,
     };
     const VkPipelineDepthStencilStateCreateInfo depth_stencil{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
