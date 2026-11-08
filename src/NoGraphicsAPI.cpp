@@ -1688,6 +1688,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
     struct RequiredFeature { VkBool32 available; const char* name; };
     const RequiredFeature required_features[]{
         {.available = features.core.features.shaderInt16, .name = "shaderInt16"},
+        {.available = features.core.features.shaderInt64, .name = "shaderInt64"},
         {.available = features.core.features.samplerAnisotropy, .name = "samplerAnisotropy"},
         {.available = features.core.features.depthBiasClamp, .name = "depthBiasClamp"},
         {.available = features.core.features.independentBlend, .name = "independentBlend"},
@@ -2157,6 +2158,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.core.features.sampleRateShading = selected.sample_rate_shading;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
     enabled_features.core.features.shaderInt16 = VK_TRUE;
+    enabled_features.core.features.shaderInt64 = VK_TRUE;
     enabled_features.core.features.depthBiasClamp = VK_TRUE;
     enabled_features.core.features.independentBlend = VK_TRUE;
     enabled_features.core.features.textureCompressionBC = selected.texture_compression_bc;
