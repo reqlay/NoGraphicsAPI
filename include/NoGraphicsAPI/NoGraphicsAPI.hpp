@@ -491,7 +491,7 @@ struct DeviceDesc
     bool wayland = false; // On Linux, display is a wl_display* and window a wl_surface* instead. See set_window_extent.
     Format swapchain_format = Format::undefined;
     ColorSpace swapchain_color_space = ColorSpace::srgb;
-    bool vsync = true; // Vulkan FIFO when on, immediate when off. iOS requires on.
+    bool vsync = true; // Vulkan FIFO when on; off is immediate, or mailbox where the surface lacks immediate. iOS requires on.
     uint32 desired_swapchain_image_count = 2; // Vulkan: 1..8 presentation contexts. Metal clamps to 2..3 drawables.
     bool steam_overlay_compatibility = false; // macOS only: allow drawable texture views and use classic Metal presentation.
     // Counts are capped to each family's capacity. A nonzero request requires that kind of queue to be available.

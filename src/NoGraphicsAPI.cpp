@@ -2650,9 +2650,15 @@ Error recreate_swapchain(Swapchain& swapchain) noexcept
         const Error error = error_from_vk(vkGetPhysicalDeviceSurfacePresentModesKHR(device.physical_device, device.surface, &count, modes),
             "vkGetPhysicalDeviceSurfacePresentModesKHR");
         if (error != Error::none) return error;
-        bool supported = false;
-        for (uint32 i = 0; i < count; ++i) supported |= modes[i] == swapchain.present_mode;
-        if (!supported) return Error::unsupported;
+        bool immediate = false, mailbox = false;
+        for (uint32 i = 0; i < count; ++i)
+        {
+            immediate |= modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR;
+            mailbox |= modes[i] == VK_PRESENT_MODE_MAILBOX_KHR;
+        }
+        // Wayland surfaces often offer mailbox but not immediate; both present without waiting for vertical blank
+        if (!immediate && !mailbox) return Error::unsupported;
+        swapchain.present_mode = immediate ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     }
     const VkSurfacePresentModeKHR present_mode_info{
         .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
@@ -2891,7 +2897,7 @@ Error set_swapchain_vsync(Device* device, bool enabled) noexcept
     if (!device->swapchain) return Error::unsupported;
     Swapchain& swapchain = *device->swapchain;
     const VkPresentModeKHR requested = enabled ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
-    if (swapchain.present_mode == requested) return Error::none;
+    if ((swapchain.present_mode == VK_PRESENT_MODE_FIFO_KHR) == enabled) return Error::none;
     const VkPresentModeKHR previous = swapchain.present_mode;
     swapchain.present_mode = requested;
     const Error error = recreate_swapchain(swapchain);
