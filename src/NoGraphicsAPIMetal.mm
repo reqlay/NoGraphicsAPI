@@ -88,8 +88,11 @@ MTLPixelFormat pixel_format(Format format)
     case Format::eac_rg: return MTLPixelFormatEAC_RG11Unorm;
     case Format::astc_4x4_srgb: return MTLPixelFormatASTC_4x4_sRGB;
     case Format::astc_4x4_unorm: return MTLPixelFormatASTC_4x4_LDR;
+    case Format::bc1_srgb: return MTLPixelFormatBC1_RGBA_sRGB;
+    case Format::bc1_unorm: return MTLPixelFormatBC1_RGBA;
     case Format::bc3_srgb: return MTLPixelFormatBC3_RGBA_sRGB;
     case Format::bc3_unorm: return MTLPixelFormatBC3_RGBA;
+    case Format::bc4_unorm: return MTLPixelFormatBC4_RUnorm;
     case Format::bc5_rg: return MTLPixelFormatBC5_RGUnorm;
     case Format::bc6h_ufloat: return MTLPixelFormatBC6H_RGBUfloat;
     case Format::bc6h_sfloat: return MTLPixelFormatBC6H_RGBFloat;
@@ -759,7 +762,7 @@ bool supports_texture_format(const Device* device, Format format, TextureUsage u
     if (info.depth && info.stencil &&
         (has_usage(usage, TextureUsage::transfer_source) || has_usage(usage, TextureUsage::transfer_destination))) return false;
     const bool compressed = info.block_extent.x > 1;
-    const bool bc = format >= Format::bc3_srgb && format <= Format::bc7_unorm;
+    const bool bc = format >= Format::bc1_srgb && format <= Format::bc7_unorm;
     if (bc && !device->caps.texture_compression_bc) return false;
     if (has_usage(usage, TextureUsage::storage))
     {
