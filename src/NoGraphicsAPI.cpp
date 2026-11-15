@@ -128,8 +128,10 @@ void require_vk(VkResult result, const char* operation, uint64 byte_count = 0) n
         abort_vk_failure(result, operation, byte_count);
 }
 
-void assert_vk(VkResult result) noexcept
+void assert_vk(VkResult result, const char* operation = "Vulkan call") noexcept
 {
+    if (result != VK_SUCCESS)
+        report_vk_failure(result, operation, true);
     assert(result == VK_SUCCESS && "unexpected Vulkan failure");
     (void)result;
 }
@@ -1159,7 +1161,7 @@ namespace
 uint64 query_timeline_value(const TimelineSemaphore& semaphore) noexcept
 {
     uint64 value = 0;
-    assert_vk(vkGetSemaphoreCounterValue(semaphore.state->device, semaphore.semaphore, &value));
+    assert_vk(vkGetSemaphoreCounterValue(semaphore.state->device, semaphore.semaphore, &value), "vkGetSemaphoreCounterValue");
     return value;
 }
 
@@ -1170,7 +1172,7 @@ void Device::poll_presentation_retirement() noexcept
     if (!presentation_retirement || completed_presentation_retirement == presentation_retirement_value)
         return;
     uint64 completed = 0;
-    assert_vk(vkGetSemaphoreCounterValue(device, presentation_retirement, &completed));
+    assert_vk(vkGetSemaphoreCounterValue(device, presentation_retirement, &completed), "vkGetSemaphoreCounterValue");
     assert(completed >= completed_presentation_retirement && completed <= presentation_retirement_value);
     if (completed == completed_presentation_retirement)
         return;
@@ -1192,7 +1194,7 @@ void Device::wait_presentation_retirement(uint64 value) noexcept
         .pSemaphores = &presentation_retirement,
         .pValues = &value,
     };
-    assert_vk(vkWaitSemaphores(device, &wait_info, ~uint64{0}));
+    assert_vk(vkWaitSemaphores(device, &wait_info, ~uint64{0}), "vkWaitSemaphores");
     completed_presentation_retirement = value;
     swapchain_delete_queue.collect(device, completed_presentation_retirement);
 }
@@ -1266,7 +1268,7 @@ void Device::wait_present_context(detail::PresentContext& context) noexcept
 {
     if (!context.present_pending)
         return;
-    assert_vk(vkWaitForFences(device, 1, &context.presented, VK_TRUE, ~uint64{0}));
+    assert_vk(vkWaitForFences(device, 1, &context.presented, VK_TRUE, ~uint64{0}), "vkWaitForFences");
     context.present_pending = false;
     finish_present_context(context);
 }
@@ -1281,7 +1283,7 @@ void Device::poll_present_contexts() noexcept
         const VkResult result = vkGetFenceStatus(device, context.presented);
         if (result == VK_NOT_READY)
             continue;
-        assert_vk(result);
+        assert_vk(result, "vkGetFenceStatus");
         context.present_pending = false;
         finish_present_context(context);
     }
@@ -2458,7 +2460,7 @@ void signal_timeline(TimelinePoint point) noexcept
     assert(point.semaphore);
     const VkSemaphoreSignalInfo signal{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
         .semaphore = point.semaphore->semaphore, .value = point.value};
-    assert_vk(vkSignalSemaphore(point.semaphore->state->device, &signal));
+    assert_vk(vkSignalSemaphore(point.semaphore->state->device, &signal), "vkSignalSemaphore");
 }
 
 void wait_timeline(TimelinePoint point) noexcept
@@ -2476,7 +2478,7 @@ void wait_timeline(TimelinePoint point) noexcept
     assert_vk(vkWaitSemaphores(
         semaphore->state->device,
         &wait_info,
-        ~uint64{0}));
+        ~uint64{0}), "vkWaitSemaphores");
 }
 
 void write_timestamp(CommandBuffer* commands, uint64* cpu_destination, Stage stage) noexcept
@@ -2526,7 +2528,7 @@ void retire_swapchain_handle(Swapchain& swapchain) noexcept
     if (!device->swapchain_maintenance)
     {
         // Core WSI has no present-completion fence. Restrict the conventional idle wait to retirement.
-        assert_vk(vkQueueWaitIdle(device->queues[0].queue));
+        assert_vk(vkQueueWaitIdle(device->queues[0].queue), "vkQueueWaitIdle");
         device->drain_contexts();
         for (uint32 index = 0; index < swapchain.image_count; ++index)
         {
@@ -3501,7 +3503,7 @@ void write_texture_descriptor(TextureDescriptorHeap* heap, uint32 index, const T
         .address = heap->descriptors + uint64(index) * device->heap_properties.imageDescriptorSize,
         .size = static_cast<size_t>(device->heap_properties.imageDescriptorSize),
     };
-    assert_vk(device->fn.write_resource_descriptors(device->device, 1, &descriptor_info, &destination));
+    assert_vk(device->fn.write_resource_descriptors(device->device, 1, &descriptor_info, &destination), "vkWriteResourceDescriptorsEXT");
     memcpy(heap->storage.range.cpu + uint64(index) * device->heap_properties.imageDescriptorSize, destination.address, destination.size);
 }
 
@@ -3545,7 +3547,7 @@ void write_sampler_descriptor(SamplerDescriptorHeap* heap, uint32 index, const S
                destination.address, destination.size);
         return;
     }
-    assert_vk(device->fn.write_sampler_descriptors(device->device, 1, &sampler_info, &destination));
+    assert_vk(device->fn.write_sampler_descriptors(device->device, 1, &sampler_info, &destination), "vkWriteSamplerDescriptorsEXT");
     memcpy(heap->storage.range.cpu + uint64(index) * device->heap_properties.samplerDescriptorSize, destination.address, destination.size);
 }
 
@@ -3862,7 +3864,7 @@ void reset_command_pool(CommandPool* pool) noexcept
         commands->submitted = false;
         commands->timestamp_count = 0;
     }
-    assert_vk(vkResetCommandPool(pool->state->device, pool->command_pool, 0));
+    assert_vk(vkResetCommandPool(pool->state->device, pool->command_pool, 0), "vkResetCommandPool");
     pool->next_buffer = pool->first;
 }
 
@@ -3873,7 +3875,8 @@ void read_timestamps(CommandPool* pool) noexcept
     {
         if (!commands->submitted || commands->timestamp_count == 0) continue;
         assert_vk(vkGetQueryPoolResults(pool->state->device, commands->timestamp_pool, 0, commands->timestamp_count,
-                                       sizeof(uint64) * commands->timestamp_count, commands->timestamp_results, sizeof(uint64), VK_QUERY_RESULT_64_BIT));
+                                       sizeof(uint64) * commands->timestamp_count, commands->timestamp_results, sizeof(uint64), VK_QUERY_RESULT_64_BIT),
+            "vkGetQueryPoolResults");
         for (uint32 index = 0; index < commands->timestamp_count; ++index)
             *commands->timestamp_destinations[index] = commands->timestamp_results[index];
         commands->timestamp_count = 0;
@@ -3929,7 +3932,7 @@ CommandBuffer* begin_commands(CommandPool* pool) noexcept
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
-    assert_vk(vkBeginCommandBuffer(commands->command_buffer, &begin_info));
+    assert_vk(vkBeginCommandBuffer(commands->command_buffer, &begin_info), "vkBeginCommandBuffer");
     commands->timestamp_count = 0;
     commands->pending_barrier = {};
     commands->acquire_barrier = {};
@@ -3949,7 +3952,7 @@ void end_commands(CommandBuffer* commands) noexcept
     VkCommandBuffer command_buffer = commands->command_buffer;
     if (commands->swapchain)
     {
-        assert_vk(vkEndCommandBuffer(command_buffer));
+        assert_vk(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
         if (!commands->epilogue)
         {
             const VkCommandBufferAllocateInfo allocate_info{
@@ -3965,7 +3968,7 @@ void end_commands(CommandBuffer* commands) noexcept
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
         };
         command_buffer = commands->epilogue;
-        assert_vk(vkBeginCommandBuffer(command_buffer, &begin_info));
+        assert_vk(vkBeginCommandBuffer(command_buffer, &begin_info), "vkBeginCommandBuffer (epilogue)");
         commands->has_epilogue = true;
         Swapchain* swapchain = commands->swapchain;
         assert(swapchain->acquired && swapchain->transition_commands == commands);
@@ -3987,7 +3990,7 @@ void end_commands(CommandBuffer* commands) noexcept
         };
         record_image_barriers(command_buffer, {&barrier, 1});
     }
-    assert_vk(vkEndCommandBuffer(command_buffer));
+    assert_vk(vkEndCommandBuffer(command_buffer), commands->has_epilogue ? "vkEndCommandBuffer (epilogue)" : "vkEndCommandBuffer");
 }
 
 namespace
@@ -4096,7 +4099,7 @@ void submit_commands(Device* device, const SubmitDesc& desc, uint32 queue_index,
         .signalSemaphoreInfoCount = signal_count,
         .pSignalSemaphoreInfos = signal_infos,
     };
-    assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, fence));
+    assert_vk(vkQueueSubmit2(queue->queue, 1, &submit_info, fence), "vkQueueSubmit2");
     for (size_t index = 0; index < desc.commands.size; ++index) desc.commands.data[index]->submitted = true;
 }
 
@@ -4130,7 +4133,7 @@ void submit_and_present(Device* device, const SubmitDesc& desc) noexcept
 #endif
     detail::PresentContext& present_context = *swapchain->present_context;
     assert(!present_context.present_pending && !present_context.swapchain);
-    assert_vk(vkResetFences(device->device, 1, &present_context.presented));
+    assert_vk(vkResetFences(device->device, 1, &present_context.presented), "vkResetFences");
     const VkSemaphore rendered = device->swapchain_maintenance ? present_context.rendered : swapchain->rendered[swapchain->image_index];
     submit_commands(device, desc, 0, present_context.acquired, rendered, device->swapchain_maintenance ? VK_NULL_HANDLE : present_context.presented);
     swapchain->transition_commands->swapchain = nullptr;
@@ -4176,7 +4179,7 @@ void wait_idle(Device* device) noexcept
 {
     assert(device && "wait_idle called with a null device");
     assert(!device->acquired_swapchain && "wait_idle is not allowed while a swapchain image is acquired");
-    assert_vk(vkDeviceWaitIdle(device->device));
+    assert_vk(vkDeviceWaitIdle(device->device), "vkDeviceWaitIdle");
     device->drain_contexts();
     device->next_present_context = 0;
 }
