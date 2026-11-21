@@ -31,6 +31,7 @@ thread_local bool force_descriptor_buffer = false;
 thread_local bool hide_optional_features = false;
 thread_local VkBool32 enabled_input_output16 = VK_FALSE;
 thread_local VkBool32 enabled_push_constant16 = VK_FALSE;
+thread_local VkBool32 enabled_dual_source_blend = VK_FALSE;
 thread_local bool hide_required_features = false;
 thread_local uint32 advertised_api_version = 0;
 thread_local uint32 descriptor_layout_limit = 0;
@@ -82,6 +83,7 @@ void VKAPI_CALL test_vkGetPhysicalDeviceFeatures2(VkPhysicalDevice physical, VkP
         features->features.shaderStorageImageWriteWithoutFormat = VK_FALSE;
         features->features.textureCompressionBC = VK_FALSE;
         features->features.textureCompressionASTC_LDR = VK_FALSE;
+        features->features.dualSrcBlend = VK_FALSE;
     }
     for (VkBaseOutStructure* next = static_cast<VkBaseOutStructure*>(features->pNext); next; next = next->pNext)
     {
@@ -240,6 +242,7 @@ VkResult VKAPI_CALL test_vkCreateDevice(VkPhysicalDevice physical, const VkDevic
 {
     enabled_input_output16 = VK_FALSE;
     enabled_push_constant16 = VK_FALSE;
+    enabled_dual_source_blend = VK_FALSE;
     for (const VkBaseInStructure* next = static_cast<const VkBaseInStructure*>(info->pNext); next; next = next->pNext)
     {
         if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
@@ -249,11 +252,12 @@ VkResult VKAPI_CALL test_vkCreateDevice(VkPhysicalDevice physical, const VkDevic
             enabled_push_constant16 = features.storagePushConstant16;
             if (hide_optional_features && (enabled_input_output16 || enabled_push_constant16)) return VK_ERROR_FEATURE_NOT_PRESENT;
         }
-        if (hide_optional_features && next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
         {
             const VkPhysicalDeviceFeatures& features = reinterpret_cast<const VkPhysicalDeviceFeatures2*>(next)->features;
-            if (features.shaderStorageImageReadWithoutFormat || features.shaderStorageImageWriteWithoutFormat ||
-                features.textureCompressionBC || features.textureCompressionASTC_LDR) return VK_ERROR_FEATURE_NOT_PRESENT;
+            enabled_dual_source_blend = features.dualSrcBlend;
+            if (hide_optional_features && (features.shaderStorageImageReadWithoutFormat || features.shaderStorageImageWriteWithoutFormat ||
+                features.textureCompressionBC || features.textureCompressionASTC_LDR || enabled_dual_source_blend)) return VK_ERROR_FEATURE_NOT_PRESENT;
         }
     }
     if (inject("vkCreateDevice")) return failure_result;
@@ -682,6 +686,8 @@ void optional_capabilities(gpu::Device* device) noexcept
     VkPhysicalDeviceVulkan11Features reported{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     VkPhysicalDeviceFeatures2 features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &reported};
     vkGetPhysicalDeviceFeatures2(device->physical_device, &features);
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(device->physical_device, &properties);
     const NativeResources before = live;
     for (uint32 mode = 0; mode < (buffer_available ? 4u : 2u); ++mode)
     {
@@ -690,7 +696,7 @@ void optional_capabilities(gpu::Device* device) noexcept
         arm(nullptr);
         const gpu::DeviceInit init = gpu::create_device();
         check(init.device && init.error == gpu::Error::none && reports == 0,
-            "devices initialize without optional 16-bit interfaces, compression, or legacy formatless feature bits");
+            "devices initialize without optional 16-bit interfaces, compression, dual-source blend, or legacy formatless feature bits");
         if (init.device)
         {
             check(!force_descriptor_buffer || !init.device->descriptor_heap, "the compatibility regression exercises descriptor buffers");
@@ -701,6 +707,9 @@ void optional_capabilities(gpu::Device* device) noexcept
                 "the push constant capability matches the driver's advertised support");
             check(caps.storage_input_output16 == (enabled_input_output16 == VK_TRUE) &&
                 caps.storage_push_constant16 == (enabled_push_constant16 == VK_TRUE), "advertised 16-bit capabilities are actually enabled");
+            check(caps.dual_source_blend == (!hide_optional_features && features.features.dualSrcBlend == VK_TRUE &&
+                properties.limits.maxFragmentDualSrcAttachments > 0), "the dual-source blend capability matches the driver's advertised support");
+            check(caps.dual_source_blend == (enabled_dual_source_blend == VK_TRUE), "advertised dual-source blending is actually enabled");
             if (hide_optional_features)
             {
                 check(!caps.texture_compression_bc && !caps.texture_compression_astc, "unavailable compression is reported through capabilities");

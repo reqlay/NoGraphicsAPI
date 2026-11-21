@@ -438,6 +438,8 @@ VkBlendFactor to_vk(BlendFactor factor)
     case BlendFactor::destination_alpha: return VK_BLEND_FACTOR_DST_ALPHA;
     case BlendFactor::one_minus_destination_alpha: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
     case BlendFactor::source_alpha_saturate: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    case BlendFactor::one_minus_source1_color: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+    case BlendFactor::one_minus_source1_alpha: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
     }
     return VK_BLEND_FACTOR_MAX_ENUM;
 }
@@ -1597,6 +1599,7 @@ struct Candidate
     bool address_commands = false;
     bool image_cube_array = false;
     bool sample_rate_shading = false;
+    bool dual_source_blend = false;
     bool texture_compression_bc = false;
     bool texture_compression_astc = false;
     bool texture_compression_etc2 = false;
@@ -1758,6 +1761,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface, 
 #endif
     result.image_cube_array = features.core.features.imageCubeArray == VK_TRUE;
     result.sample_rate_shading = features.core.features.sampleRateShading == VK_TRUE;
+    result.dual_source_blend = features.core.features.dualSrcBlend == VK_TRUE && result.properties.limits.maxFragmentDualSrcAttachments > 0;
     result.texture_compression_bc = features.core.features.textureCompressionBC == VK_TRUE;
     result.texture_compression_astc = features.core.features.textureCompressionASTC_LDR == VK_TRUE;
     result.texture_compression_etc2 = features.core.features.textureCompressionETC2 == VK_TRUE;
@@ -2185,6 +2189,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
     // Shaders that read SV_SampleIndex need it
     enabled_features.core.features.sampleRateShading = selected.sample_rate_shading;
+    enabled_features.core.features.dualSrcBlend = selected.dual_source_blend;
     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
     enabled_features.core.features.shaderInt16 = VK_TRUE;
     enabled_features.core.features.shaderInt64 = VK_TRUE;
@@ -2395,6 +2400,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
         .storage_input_output16 = selected.storage_input_output16,
         .indirect_mesh_draw = true,
         .storage_push_constant16 = selected.storage_push_constant16,
+        .dual_source_blend = selected.dual_source_blend,
     };
     if (presentation)
     {

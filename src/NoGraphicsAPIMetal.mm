@@ -1202,7 +1202,7 @@ MTLBlendFactor blend_factor(BlendFactor factor)
         MTLBlendFactorZero, MTLBlendFactorOne, MTLBlendFactorSourceColor, MTLBlendFactorOneMinusSourceColor,
         MTLBlendFactorDestinationColor, MTLBlendFactorOneMinusDestinationColor, MTLBlendFactorSourceAlpha,
         MTLBlendFactorOneMinusSourceAlpha, MTLBlendFactorDestinationAlpha, MTLBlendFactorOneMinusDestinationAlpha,
-        MTLBlendFactorSourceAlphaSaturated,
+        MTLBlendFactorSourceAlphaSaturated, MTLBlendFactorOneMinusSource1Color, MTLBlendFactorOneMinusSource1Alpha,
     };
     return factors[static_cast<uint32>(factor)];
 }

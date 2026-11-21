@@ -374,6 +374,8 @@ enum class BlendFactor : uint8
     destination_alpha,
     one_minus_destination_alpha,
     source_alpha_saturate,
+    one_minus_source1_color,
+    one_minus_source1_alpha,
 };
 
 enum class BlendOp : uint8
@@ -489,6 +491,7 @@ struct DeviceCaps
     bool storage_input_output16 = false; // 16-bit shader stage inputs/outputs; enabled on Vulkan only when advertised.
     bool indirect_mesh_draw = false;
     bool storage_push_constant16 = false; // Vulkan-only capability; not needed for 16-bit members of GPU roots.
+    bool dual_source_blend = false; // Enables source1 factors for a single color attachment.
 };
 
 enum class ColorSpace : uint32 { srgb, extended_srgb_linear };

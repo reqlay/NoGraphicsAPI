@@ -346,7 +346,7 @@ static_assert(default_caps.device_name == nullptr && default_caps.max_push_data_
               default_caps.texture_heap_alignment == 0 &&
               !default_caps.texture_compression_bc &&
               !default_caps.texture_compression_astc && !default_caps.storage_input_output16 && !default_caps.indirect_mesh_draw &&
-              !default_caps.storage_push_constant16);
+              !default_caps.storage_push_constant16 && !default_caps.dual_source_blend);
 constexpr gpu::DeviceInit default_device_init{};
 static_assert(default_device_init.device == nullptr &&
               default_device_init.error == gpu::Error::none);
